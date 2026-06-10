@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         调整漫画阅读页面样式
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  隐藏特定影响阅读的广告元素，支持PC端访问，修复Via浏览器兼容
+// @version      1.6
+// @description  隐藏特定影响阅读的广告元素，支持PC端访问
 // @author       Suave
 // @match        https://www.mqzjw.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=mqzjw.com
@@ -10,6 +10,13 @@
 // @run-at       document-start
 // ==/UserScript==
 
+// 1.0 初始化
+// 1.1 优化样式
+// 1.2 兼容pc端访问
+// 1.3 修复pc端样式
+// 1.4 修复via 浏览器支持
+// 1.5 继续优化样式
+// 1.6 继续优化样式
 (function () {
   "use strict";
 
@@ -350,7 +357,7 @@
     `@media (${SMALL_SCREEN}) {.recommend-comics li a img { width: 100% !important; }}\n` +
     ".comics-detail__info { height: auto !important; }\n" +
     ".pure-g { background-color: #fff !important; display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(100% / 6), 1fr)) !important; gap: 10px !important; padding: 10px !important; border-radius: 4px !important; }\n" +
-    `@media (${SMALL_SCREEN}) {.pure-g { grid-template-columns: repeat(3, 1fr) !important; display: grid !important; }}\n` +
+    `@media (${SMALL_SCREEN}) {.pure-g { grid-template-columns: repeat(3, 1fr) !important; display: grid; }}\n` +
     `@media (${SMALL_SCREEN}) {.pure-g .comics-card { width: 100% !important; min-width: 0 !important; }}\n` +
     ".pure-g .comics-card { background-color: #fff !important; border: 1px solid transparent !important; border-radius: 4px !important; width: 100% !important; }\n" +
     `.pure-g .comics-card:hover { border-color: var(--link-hover-color) !important; }\n` +
@@ -372,10 +379,16 @@
     `.mt-5 .l-content { width: 100%; max-width: 100%; }` +
     `#chapter-items .comics-chapters { width: 100%; min-width: 0; }` +
     `#chapter-items1 .comics-chapters { width: 100%; min-width: 0; }` +
+    `#chapter-items2 .comics-chapters { width: 100%; min-width: 0; }` +
+    `@media (${SMALL_SCREEN}) {#chapter-items { grid-template-columns: repeat(2, 1fr) !important; }}\n` +
+    `@media (${SMALL_SCREEN}) {#chapter-items1 { grid-template-columns: repeat(2, 1fr) !important; }}\n` +
+    `@media (${SMALL_SCREEN}) {#chapter-items2 { grid-template-columns: repeat(2, 1fr) !important; }}\n` +
     `@media (${SMALL_SCREEN}) {#chapter-items .comics-chapters { width:50% !important; }}\n` +
     `@media (${SMALL_SCREEN}) {#chapter-items1 .comics-chapters { width:50% !important; }}\n` +
+    `@media (${SMALL_SCREEN}) {#chapter-items2 .comics-chapters { width:50% !important; }}\n` +
     `@media (${SMALL_SCREEN}) {.xianshi #chapter-items .comics-chapters { width:100% !important; }}\n` +
     `@media (${SMALL_SCREEN}) {.xianshi #chapter-items1 .comics-chapters { width:100% !important; }}\n` +
+    `@media (${SMALL_SCREEN}) {.xianshi #chapter-items2 .comics-chapters { width:100% !important; }}\n` +
     `.de-info__bg { background: transparent !important; }` +
     `.de-info__overlay { background: transparent !important; }` +
     `.de-info__box { display: flex !important; padding: 20px !important; height: 300px !important; gap: 20px;}` +
