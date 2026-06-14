@@ -12,6 +12,7 @@
 
 // 1.0 init初版
 // 1.1 修复图片过大，加大力度隐藏广告
+// 1.2 隐藏广告
 
 (function () {
   "use strict";
@@ -27,7 +28,8 @@
       "#container .c-container { width: 100% !important; }" +
       "#input-root .panel-list_8jHmm { display: none !important; }" +
       "#s-hotsearch-wrapper { display: none !important; }" +
-      ".card-normal_3X7DX .c-span-last { flex: 1 !important; }";
+      ".card-normal_3X7DX .c-span-last { flex: 1 !important; }" +
+      ".cosc-card-content .sub-col_5FzGm { width: 200px !important; }";
 
     /**
      * 通过自定义属性查找匹配的元素
@@ -42,6 +44,25 @@
         var attr = opts.attr || "mu";
         return document.querySelector("[" + attr + '*="' + opts.value + '"]');
       } catch (e) {}
+    };
+
+    /**
+     * 通过自定义属性查找所有匹配的元素
+     * @param {Object} opts - 查询选项
+     * @param {string} opts.value - 要匹配的属性值
+     * @param {string} [opts.attr=mu] - 要查询的属性名，默认 "mu"
+     * @returns {Element[]} 所有匹配的元素数组，未找到返回空数组
+     */
+    var findAllMuElements = function (opts) {
+      try {
+        if (!opts || !opts.value) return [];
+        var attr = opts.attr || "mu";
+        return document.querySelectorAll(
+          "[" + attr + '*="' + opts.value + '"]',
+        );
+      } catch (e) {
+        return [];
+      }
     };
 
     var waitForMuElement = function (opts) {
@@ -187,18 +208,39 @@
       { attr: "tpl", value: "med_wenzhen_san" },
       { attr: "tpl", value: "ai_ecology" },
       { attr: "tpl", value: "qidian2" },
+      { attr: "mu", value: "https://shouyou.3dmgame.com" },
+      { attr: "mu", value: "https://app.3dmgame.com" },
+      { attr: "mu", value: "https://www.yx007.com" },
+      { attr: "mu", value: "https://m.wandoujia.com" },
+      { attr: "mu", value: "http://as.baidu.com" },
+      { attr: "tpl", value: "guanfanghao_san" },
+      { attr: "mu", value: "http://nourl.ubs.baidu.com" },
+      { attr: "mu", value: "https://www.bohe.cn" },
+      { attr: "mu", value: "https://localsite.baidu.com" },
+      { attr: "mu", value: "https://b2b.baidu.com" },
+      { attr: "tpl", value: "fw_lawyer_recommend_card_san" },
     ];
 
     var processedParents = new WeakSet();
 
+    /**
+     * 应用所有隐藏和布局规则
+     * - 注入必要的样式
+     * - 遍历 hideRules 隐藏匹配的元素
+     * - 调整 .cos-col 元素的宽度布局，首个设为 140px，其余占满剩余空间
+     * @returns {void}
+     */
     function applyAllRules() {
       ensureStyles();
 
       hideRules.forEach(function (rule) {
         try {
-          var el = findMuElement(rule);
-          if (el && el.style.display !== "none") {
-            el.style.display = "none";
+          var els = findAllMuElements(rule);
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (el.style.display !== "none") {
+              el.style.display = "none";
+            }
           }
         } catch (e) {}
       });
