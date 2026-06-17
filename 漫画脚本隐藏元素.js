@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         调整漫画阅读页面样式
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  隐藏特定影响阅读的广告元素，支持PC端访问
+// @version      1.7
+// @description  隐藏特定影响阅读的广告元素，支持PC端访问，优化图片懒加载
 // @author       Suave
 // @match        https://www.mqzjw.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=mqzjw.com
@@ -17,6 +17,7 @@
 // 1.4 修复via 浏览器支持
 // 1.5 继续优化样式
 // 1.6 继续优化样式
+// 1.7 优化图片懒加载
 (function () {
   "use strict";
 
@@ -24,6 +25,73 @@
   var styleElement = null;
   var userCssElement = null;
   var observer = null;
+
+  // ===== 禁用懒加载：立即加载所有漫画图片 =====
+  var lazyloadOverridden = false;
+
+  // 覆写 jQuery.fn.lazyload 使其失效
+  function overrideLazyloadPlugin() {
+    try {
+      if (
+        typeof jQuery !== "undefined" &&
+        jQuery.fn &&
+        typeof jQuery.fn.lazyload === "function"
+      ) {
+        jQuery.fn.lazyload = function () {
+          return this;
+        };
+        lazyloadOverridden = true;
+      }
+    } catch (e) {}
+  }
+
+  // 立即加载所有懒加载图片（将 data-original 赋给 src）
+  function loadAllLazyImages() {
+    try {
+      // 优先用 jQuery 选择器，兼容插件内部标记
+      try {
+        if (typeof jQuery !== "undefined") {
+          jQuery("img.lazy-read").each(function () {
+            var $img = jQuery(this);
+            var original = $img.attr("data-original");
+            var currentSrc = $img.attr("src");
+            if (original && currentSrc !== original) {
+              $img.attr("src", original);
+            }
+          });
+        }
+      } catch (e) {}
+
+      // 原生方式兜底
+      var imgs = document.querySelectorAll("img.lazy-read");
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var original = img.getAttribute("data-original");
+        if (original && img.src !== original) {
+          img.src = original;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 持续尝试覆写 lazyload（因为 jQuery 可能还未加载）
+  function tryOverrideLazyload() {
+    try {
+      if (lazyloadOverridden) return;
+      overrideLazyloadPlugin();
+      if (!lazyloadOverridden) {
+        setTimeout(tryOverrideLazyload, 100);
+      }
+    } catch (e) {}
+  }
+  try {
+    tryOverrideLazyload();
+    // 立即尝试加载一次现有图片（适用于 DOM 渐进式加载的场景）
+    if (document.querySelector("img.lazy-read")) {
+      loadAllLazyImages();
+    }
+  } catch (e) {}
+  // ===== 禁用懒加载 END =====
 
   function debounce(fn, delay) {
     return function () {
@@ -482,6 +550,12 @@
 
     try {
       ensureUserCssElement();
+    } catch (e) {}
+
+    // 每次运行都尝试覆写 lazyload 并加载图片
+    try {
+      overrideLazyloadPlugin();
+      loadAllLazyImages();
     } catch (e) {}
   }
 
