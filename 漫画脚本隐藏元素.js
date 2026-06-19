@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         调整漫画阅读页面样式
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.8
 // @description  隐藏特定影响阅读的广告元素，支持PC端访问，优化图片懒加载
 // @author       Suave
 // @match        https://www.mqzjw.com/*
@@ -18,6 +18,7 @@
 // 1.5 继续优化样式
 // 1.6 继续优化样式
 // 1.7 优化图片懒加载
+// 1.8 优化图片懒加载，样式调整
 (function () {
   "use strict";
 
@@ -25,6 +26,7 @@
   var styleElement = null;
   var userCssElement = null;
   var observer = null;
+  var initCalled = false;
 
   // ===== 禁用懒加载：立即加载所有漫画图片 =====
   var lazyloadOverridden = false;
@@ -47,6 +49,7 @@
 
   // 立即加载所有懒加载图片（将 data-original 赋给 src）
   function loadAllLazyImages() {
+    var loadedCount = 0;
     try {
       // 优先用 jQuery 选择器，兼容插件内部标记
       try {
@@ -57,6 +60,7 @@
             var currentSrc = $img.attr("src");
             if (original && currentSrc !== original) {
               $img.attr("src", original);
+              loadedCount++;
             }
           });
         }
@@ -69,9 +73,18 @@
         var original = img.getAttribute("data-original");
         if (original && img.src !== original) {
           img.src = original;
+          loadedCount++;
         }
       }
     } catch (e) {}
+
+    if (loadedCount > 0) {
+      console.log(
+        "[漫画脚本] 懒加载图片: 已交换 " +
+          loadedCount +
+          " 张图片 (data-original → src)",
+      );
+    }
   }
 
   // 持续尝试覆写 lazyload（因为 jQuery 可能还未加载）
@@ -105,6 +118,94 @@
       }, delay);
     };
   }
+
+  // ===== 滚动懒加载：距离触底半屏时提前加载 =====
+  function setupScrollLazyLoad() {
+    if (typeof jQuery === "undefined") {
+      console.log("[漫画脚本] jQuery 未就绪，延迟设置滚动监听");
+      setTimeout(setupScrollLazyLoad, 500);
+      return;
+    }
+
+    console.log("[漫画脚本] 设置滚动懒加载监听（阈值：半屏高度）");
+
+    // 在 get_datas() 完成后重试加载新图片（补 MutationObserver 可能的遗漏）
+    function retryLoadNewImages(maxRetries) {
+      var retries = 0;
+      function tryLoad() {
+        var imgs = document.querySelectorAll("img.lazy-read");
+        var pending = 0;
+        for (var i = 0; i < imgs.length; i++) {
+          var original = imgs[i].getAttribute("data-original");
+          if (original && imgs[i].src !== original) {
+            pending++;
+          }
+        }
+        console.log(
+          "[漫画脚本] 图片加载重试 #" +
+            (retries + 1) +
+            " | 待加载: " +
+            pending +
+            " 张",
+        );
+        loadAllLazyImages();
+        retries++;
+        if (pending > 0 && retries < maxRetries) {
+          setTimeout(tryLoad, 400);
+        } else if (pending === 0) {
+          console.log("[漫画脚本] 新图片全部加载完成");
+        }
+      }
+      setTimeout(tryLoad, 300);
+    }
+
+    var scrollCheck = debounce(function () {
+      var scrollTop = jQuery(document).scrollTop();
+      var windowHeight = jQuery(window).height();
+      var docHeight = jQuery(document).height();
+      var threshold = window.innerHeight / 2; // 半屏高度
+      var scrollBottom = scrollTop + windowHeight;
+      var triggerPoint = docHeight - threshold;
+
+      console.log(
+        "[漫画脚本] 滚动检测 | scrollBottom: " +
+          Math.round(scrollBottom) +
+          " | triggerPoint: " +
+          Math.round(triggerPoint) +
+          " | 距离底部: " +
+          Math.round(docHeight - scrollBottom) +
+          "px | 阈值: " +
+          Math.round(threshold) +
+          "px | isLoading: " +
+          (window.isloading ? "是" : "否") +
+          " | ends: " +
+          (window.ends || 0),
+      );
+
+      if (
+        scrollBottom > triggerPoint &&
+        !window.isloading &&
+        window.ends !== 1
+      ) {
+        if (typeof get_datas === "function") {
+          console.log(
+            "[漫画脚本] ★ 触发懒加载，调用 get_datas()，当前 page: " +
+              (window.page || 1),
+          );
+          window.isloading = true;
+          get_datas();
+          // get_datas 完成后轮询处理新图片（最多重试 8 次，覆盖约 3 秒）
+          retryLoadNewImages(8);
+        } else {
+          console.log("[漫画脚本] get_datas 函数尚未就绪，跳过");
+        }
+      }
+    }, 200);
+
+    jQuery(window).on("scroll", scrollCheck);
+    console.log("[漫画脚本] 滚动懒加载监听已就绪");
+  }
+  // ===== 滚动懒加载 END =====
 
   function setMobileUserAgent() {
     var mobileUA =
@@ -436,7 +537,9 @@
     `@media (${SMALL_SCREEN}) {.xianshi { width: 100% !important; height: 60vh !important; position: relative; }}\n` +
     ".xianshi .desc { height: 48px !important; display: flex; justify-content: space-between; box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.06); }" +
     ".xianshi .desc span { height: 100% !important; position: static !important; margin: 0px !important; border-radius: 4px !important; display: flex !important; justify-content: center !important; align-items: center !important; }" +
+    "catalog-head { cursor: default !important;}" +
     ".catalog-head a { height: 26px !important; position: static !important; border-radius: 4px !important; display: flex !important; justify-content: center !important; align-items: center !important; background-color: #fff !important; }" +
+    ".catalog-head a:hover { background: #ffd706 !important; color: #fff !important; border-color: transparent !important;}" +
     ".catalog-head catalog-title { font-size: 20px !important; }" +
     ".switch-books::-webkit-scrollbar { width: 0px !important; height: 0px !important;}" +
     "#__nuxt { min-height: 100vh !important;}" +
@@ -467,7 +570,10 @@
     `@media (${SMALL_SCREEN}) {.de-info__box { display: block !important; height: auto !important; }}\n` +
     `@media (${SMALL_SCREEN}) {.de-info__box .pure-u-md-1-6 { width: 100% !important; height: 250px !important; display: flex; justify-content: center; }}\n` +
     `@media (${SMALL_SCREEN}) {.de-info__box .pure-u-md-1-6 img { width: auto !important;  }}\n` +
-    `.comics-detail__title a { box-shadow: unset !important;}`;
+    `.comics-detail__title a { box-shadow: unset !important;}` +
+    `.comic-chapter .container { width: 100% !important;}` +
+    ".classify-nav .cate-item:hover { background-color: #ffd706 !important; color: #212529 !important; border-radius: 4px !important; }" +
+    ".sou-result .list { background: #fff !important; padding-top: 10px !important;}";
   function ensureStyleElement() {
     if (styleElement && document.getElementById("user-script-styles")) {
       return;
@@ -627,10 +733,18 @@
   }
 
   function init() {
+    if (initCalled) {
+      console.log("[漫画脚本] init 已执行过，跳过重复初始化");
+      return;
+    }
+    initCalled = true;
+    console.log("[漫画脚本] 初始化开始");
     ensureStyleElement();
     showForbiddenOverlay();
     runAllFunctions();
     setupMutationObserver();
+    setupScrollLazyLoad();
+    console.log("[漫画脚本] 初始化完成");
   }
 
   if (
