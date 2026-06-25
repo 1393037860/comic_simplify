@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         调整漫画阅读页面样式
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  隐藏特定影响阅读的广告元素，支持PC端访问，优化图片懒加载
+// @version      1.9
+// @description  隐藏特定影响阅读的广告元素，支持PC端访问，优化图片懒加载，修复底部图片不加载问题
 // @author       Suave
 // @match        https://www.mqzjw.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=mqzjw.com
@@ -19,6 +19,7 @@
 // 1.6 继续优化样式
 // 1.7 优化图片懒加载
 // 1.8 优化图片懒加载，样式调整
+// 1.9 修复: retryLoadNewImages过早退出导致底部图片不加载; 加载后自动检查是否需要继续翻页; isloading安全超时防永久锁定; 图片加载失败指数退避重试3次
 (function () {
   "use strict";
 
@@ -47,6 +48,64 @@
     } catch (e) {}
   }
 
+  // 图片加载失败重试：最大重试次数、重试延迟（指数退避）
+  var MAX_IMG_RETRIES = 3;
+  var RETRY_BASE_DELAY = 2000; // 首次重试等待 2 秒
+
+  /**
+   * 为单张图片绑定 onerror 重试（指数退避，最多 3 次）
+   * @param {HTMLImageElement} img - 目标图片元素
+   * @param {string} originalSrc - 原始图片 URL（data-original 属性值）
+   */
+  function setupImageRetry(img, originalSrc) {
+    try {
+      if (!img || !img.getAttribute) return;
+      // 如果已经绑定了重试机制，不再重复绑定
+      if (img.getAttribute("data-retry-setup") === "1") return;
+      img.setAttribute("data-retry-setup", "1");
+
+      img.addEventListener(
+        "error",
+        function onImgError() {
+          var currentRetry = parseInt(
+            img.getAttribute("data-retry-count") || "0",
+            10,
+          );
+          if (currentRetry < MAX_IMG_RETRIES) {
+            var nextRetry = currentRetry + 1;
+            img.setAttribute("data-retry-count", String(nextRetry));
+            var delay = RETRY_BASE_DELAY * Math.pow(2, currentRetry); // 2s, 4s, 8s
+            console.log(
+              "[漫画脚本] 图片加载失败，第 " +
+                nextRetry +
+                "/" +
+                MAX_IMG_RETRIES +
+                " 次重试 (" +
+                delay +
+                "ms 后): " +
+                (originalSrc || img.src).substring(0, 80),
+            );
+            setTimeout(function () {
+              img.src = originalSrc || img.src;
+            }, delay);
+          } else {
+            console.error(
+              "[漫画脚本] 图片加载失败，已达最大重试次数 " +
+                MAX_IMG_RETRIES +
+                "，放弃加载: " +
+                (originalSrc || img.src).substring(0, 80),
+            );
+            // 显示占位图或标记为失败
+            img.setAttribute("data-load-failed", "1");
+            // 移除事件监听，避免继续触发
+            img.removeEventListener("error", onImgError);
+          }
+        },
+        { once: false },
+      );
+    } catch (e) {}
+  }
+
   // 立即加载所有懒加载图片（将 data-original 赋给 src）
   function loadAllLazyImages() {
     var loadedCount = 0;
@@ -61,6 +120,8 @@
             if (original && currentSrc !== original) {
               $img.attr("src", original);
               loadedCount++;
+              // 绑定重试
+              setupImageRetry(this, original);
             }
           });
         }
@@ -74,6 +135,8 @@
         if (original && img.src !== original) {
           img.src = original;
           loadedCount++;
+          // 绑定重试
+          setupImageRetry(img, original);
         }
       }
     } catch (e) {}
@@ -106,6 +169,12 @@
   } catch (e) {}
   // ===== 禁用懒加载 END =====
 
+  /**
+   * 函数防抖
+   * @param {Function} fn - 要防抖的函数
+   * @param {number} delay - 延迟毫秒数
+   * @returns {Function} 防抖后的函数
+   */
   function debounce(fn, delay) {
     return function () {
       var args = arguments;
@@ -146,17 +215,92 @@
             (retries + 1) +
             " | 待加载: " +
             pending +
-            " 张",
+            " 张 | isLoading: " +
+            (window.isloading ? "是" : "否") +
+            " | ends: " +
+            (window.ends || 0),
         );
         loadAllLazyImages();
         retries++;
-        if (pending > 0 && retries < maxRetries) {
-          setTimeout(tryLoad, 400);
-        } else if (pending === 0) {
-          console.log("[漫画脚本] 新图片全部加载完成");
+        // 持续重试：只要有待加载图片就继续，或者 AJAX 还没返回(isloading=true)也继续
+        if (retries < maxRetries) {
+          if (pending > 0) {
+            // 还有待加载图片，继续轮询
+            setTimeout(tryLoad, 400);
+          } else if (window.isloading) {
+            // 没有待加载图片但 AJAX 还没返回(isloading 仍为 true)，继续等待
+            setTimeout(tryLoad, 400);
+          } else {
+            // pending === 0 且 isloading === false，AJAX 已完成且图片已全部加载
+            console.log("[漫画脚本] 新图片全部加载完成");
+            // 加载完成后自动重新检查是否还需要加载更多
+            schedulePostLoadCheck();
+          }
+        } else {
+          console.log(
+            "[漫画脚本] 重试结束" +
+              (pending > 0 ? "，仍有 " + pending + " 张图片待加载" : ""),
+          );
         }
       }
       setTimeout(tryLoad, 300);
+    }
+
+    // 在 get_datas() 加载完成后，重新检查滚动位置是否需要继续加载下一页
+    function schedulePostLoadCheck() {
+      setTimeout(function () {
+        if (typeof jQuery !== "undefined" && typeof get_datas === "function") {
+          var scrollTop = jQuery(document).scrollTop();
+          var windowHeight = jQuery(window).height();
+          var docHeight = jQuery(document).height();
+          var threshold = window.innerHeight / 2;
+          var scrollBottom = scrollTop + windowHeight;
+          var triggerPoint = docHeight - threshold;
+
+          console.log(
+            "[漫画脚本] 加载后检查 | scrollBottom: " +
+              Math.round(scrollBottom) +
+              " | triggerPoint: " +
+              Math.round(triggerPoint) +
+              " | 距离底部: " +
+              Math.round(docHeight - scrollBottom) +
+              "px | isLoading: " +
+              (window.isloading ? "是" : "否") +
+              " | ends: " +
+              (window.ends || 0),
+          );
+
+          if (
+            scrollBottom > triggerPoint &&
+            !window.isloading &&
+            window.ends !== 1
+          ) {
+            console.log(
+              "[漫画脚本] ★ 加载后触发继续加载下一页, page: " +
+                (window.page || 1),
+            );
+            window.isloading = true;
+            if (window._isloadingSafetyTimer) {
+              clearTimeout(window._isloadingSafetyTimer);
+            }
+            window._isloadingSafetyTimer = setTimeout(function () {
+              if (window.isloading) {
+                console.warn(
+                  "[漫画脚本] ⚠ isloading 安全超时，强制解锁 (page=" +
+                    (window.page || 1) +
+                    ", ends=" +
+                    (window.ends || 0) +
+                    ")",
+                );
+                window.isloading = false;
+              }
+              window._isloadingSafetyTimer = null;
+            }, 10000);
+            get_datas();
+            retryLoadNewImages(8);
+          }
+        }
+      }, 600);
     }
 
     var scrollCheck = debounce(function () {
@@ -193,6 +337,23 @@
               (window.page || 1),
           );
           window.isloading = true;
+          // 安全超时：如果 get_datas 的 AJAX 失败或返回异常，10 秒后自动解锁
+          if (window._isloadingSafetyTimer) {
+            clearTimeout(window._isloadingSafetyTimer);
+          }
+          window._isloadingSafetyTimer = setTimeout(function () {
+            if (window.isloading) {
+              console.warn(
+                "[漫画脚本] ⚠ isloading 安全超时，强制解锁 (page=" +
+                  (window.page || 1) +
+                  ", ends=" +
+                  (window.ends || 0) +
+                  ")",
+              );
+              window.isloading = false;
+            }
+            window._isloadingSafetyTimer = null;
+          }, 10000);
           get_datas();
           // get_datas 完成后轮询处理新图片（最多重试 8 次，覆盖约 3 秒）
           retryLoadNewImages(8);
@@ -323,6 +484,10 @@
     });
   }
 
+  /**
+   * 根据选择器隐藏元素
+   * @param {{selector: string, selectorType?: 'id'|'class'}} options
+   */
   function hideElement(options) {
     var selector = options.selector;
     var selectorType = options.selectorType || "class";
@@ -485,6 +650,13 @@
     }
   }
 
+  /**
+   * 在指定父元素下查找包含特定文本的标签元素
+   * @param {string} parentSelector - 父元素 CSS 选择器
+   * @param {string} tagName - 要查找的标签名（如 "span"）
+   * @param {string} targetText - 要匹配的文本内容
+   * @returns {Element[]} 匹配的元素数组
+   */
   function findElementByText(parentSelector, tagName, targetText) {
     var elements = [];
     var parentElements = document.querySelectorAll(parentSelector);
@@ -666,41 +838,45 @@
   }
 
   function onNavigation() {
-    ensureStyleElement();
-    ensureUserCssElement();
-    runAllFunctions();
-    showForbiddenOverlay();
+    try {
+      ensureStyleElement();
+      ensureUserCssElement();
+      runAllFunctions();
+      showForbiddenOverlay();
+    } catch (e) {}
   }
 
   var debouncedOnNavigation = debounce(onNavigation, 300);
 
   function interceptHistoryAPI() {
-    var _pushState = history.pushState;
-    var _replaceState = history.replaceState;
+    try {
+      var _pushState = history.pushState;
+      var _replaceState = history.replaceState;
 
-    if (_pushState) {
-      history.pushState = function () {
-        var result = _pushState.apply(this, arguments);
+      if (_pushState) {
+        history.pushState = function () {
+          var result = _pushState.apply(this, arguments);
+          debouncedOnNavigation();
+          return result;
+        };
+      }
+
+      if (_replaceState) {
+        history.replaceState = function () {
+          var result = _replaceState.apply(this, arguments);
+          debouncedOnNavigation();
+          return result;
+        };
+      }
+
+      window.addEventListener("popstate", function () {
         debouncedOnNavigation();
-        return result;
-      };
-    }
+      });
 
-    if (_replaceState) {
-      history.replaceState = function () {
-        var result = _replaceState.apply(this, arguments);
+      window.addEventListener("hashchange", function () {
         debouncedOnNavigation();
-        return result;
-      };
-    }
-
-    window.addEventListener("popstate", function () {
-      debouncedOnNavigation();
-    });
-
-    window.addEventListener("hashchange", function () {
-      debouncedOnNavigation();
-    });
+      });
+    } catch (e) {}
   }
 
   interceptHistoryAPI();
