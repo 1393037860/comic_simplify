@@ -29,7 +29,10 @@
       "#input-root .panel-list_8jHmm { display: none !important; }" +
       "#s-hotsearch-wrapper { display: none !important; }" +
       ".card-normal_3X7DX .c-span-last { flex: 1 !important; }" +
-      ".cosc-card-content .sub-col_5FzGm { width: 200px !important; }";
+      ".cosc-card-content .sub-col_5FzGm { width: 200px !important; }" +
+      ".wrapper_new .s_form.s_form_fresh { padding-left: 30px !important; }" +
+      ".new-pmd #s_tab_inner { padding-left: 150px !important; }" +
+      ".page-sample .page-inner_2jZi2 { margin: 0px !important; }";
 
     /**
      * 通过自定义属性查找匹配的元素
@@ -219,6 +222,7 @@
       { attr: "mu", value: "https://localsite.baidu.com" },
       { attr: "mu", value: "https://b2b.baidu.com" },
       { attr: "tpl", value: "fw_lawyer_recommend_card_san" },
+      { attr: "tpl", value: "app/rs" },
     ];
 
     var processedParents = new WeakSet();
