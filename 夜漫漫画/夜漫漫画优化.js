@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  夜漫(m.yueman1.cc)整合脚本：①移除顶部/底部广告与点击劫持(wap_show广告SDK) ②阅读页整话连看(增量懒加载，防封IP)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -10,6 +10,11 @@
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
+
+// 1.0 初版：合并「夜漫漫画去广告」+「夜漫漫画整章显示」为单脚本（整章连看为增量懒加载）
+// 1.1 修复: 点击拦截误伤 javascript: 伪链接（搜索/分享等 onClick 按钮），导致面板打不开并报
+//     Uncaught TypeError: Cannot read properties of null (reading 'removeChild');
+//     改为仅拦截真正跳转的外站 http(s) 链接，伪链接/锚点/非网页协议一律放行
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
@@ -20,7 +25,7 @@
 //   2. 拦截广告 WebSocket（SDK 对夸克/UC/MIUI 等国产浏览器走的广告通道）
 //   3. window.open / location.assign / location.replace 白名单拦截
 //   4. location.href 直改跳转监视回滚（SDK 用这招直接整页跳广告，无法重写故监视回跳）
-//   5. 点击劫持拦截：外部链接一律掐断
+//   5. 点击劫持拦截：外站 http(s) 链接一律掐断（javascript: 等站点伪链接放行，防误伤 UI）
 //   6. 残留清理：万一 SDK 先跑了一步，清掉透明点击层与底部 100px 内边距
 //
 // 【第二部分 · 整章连看】仅阅读页 /p/xxx/xxx.html 生效，其它页面自动跳过：
@@ -33,9 +38,7 @@
 //   - BUFFER（整章连看用）：可视区下方预加载的冗余图片张数，默认 5，可自行增减
 //   - ALLOWED_HOSTS（去广告用）：放行域名白名单，命中白名单的脚本/跳转/WebSocket 不拦截
 //   - isAdSdkSrc 正则：命中的脚本路径会被移除（现匹配 g_js/wap_show_*.js）
-//
-// 【安装提示】：启用本脚本后，请在油猴里停用/删除旧的
-//   「夜漫漫画去广告」与「夜漫漫画整章显示」两个脚本，避免重复执行。
+
 // ==============================================================
 
 (function () {
@@ -46,7 +49,13 @@
   // ============================================================
 
   // ----- 白名单：脚本/跳转/WebSocket 只放行这些域名（图片域名 gugu6 也放行）-----
-  const ALLOWED_HOSTS = ["yueman1.cc", "gugu6.com", "qtcms.com", "bdimg.com", "bdstatic.com"];
+  const ALLOWED_HOSTS = [
+    "yueman1.cc",
+    "gugu6.com",
+    "qtcms.com",
+    "bdimg.com",
+    "bdstatic.com",
+  ];
 
   const isAllowedHost = (hostname) =>
     ALLOWED_HOSTS.some((h) => hostname === h || hostname.endsWith("." + h));
@@ -187,14 +196,27 @@
   }, 80);
 
   // ----- 5) 点击劫持拦截：外部链接一律掐断（广告链接点击无效）-----
-  // 捕获阶段(document, capture=true)先于页面所有监听执行
+  // 捕获阶段(document, capture=true)先于页面所有监听执行。
+  // 注意：仅拦截真正会跳转的 http(s) 外站链接；
+  // javascript: / # / mailto: 等伪链接是站点自己的 UI 占位(搜索/分享/展开面板)，
+  // 不能拦，否则会误伤页面功能（如搜索图标 onClick 无法执行）。
   const blockAdClick = (event) => {
     try {
       const t = event.target;
       if (!t || typeof t.closest !== "function") return;
       const a = t.closest("a[href]");
       if (a) {
-        const href = a.getAttribute("href") || "";
+        const href = (a.getAttribute("href") || "").trim();
+        // 伪链接 / 占位 / 站内锚点 / 非网页协议：放行给站点自己处理
+        if (
+          !href ||
+          href.charAt(0) === "#" ||
+          /^javascript:/i.test(href) ||
+          /^(mailto|tel|data|blob|about):/i.test(href)
+        ) {
+          return;
+        }
+        // 真正会导航的外站 http(s) 链接才拦截
         if (!isAllowedUrl(href)) {
           event.preventDefault();
           event.stopImmediatePropagation(); // 阻止默认行为 + 阻止站点后续监听
@@ -309,9 +331,17 @@
         else break; // 碰到可视区内的图片即停止计数
       }
       while (pending.length && extra < BUFFER) {
-        const img = makeImg(pending.shift(), imgs.length);
-        wrapper.appendChild(img); // 每补一张都会开始加载
-        extra++;
+        // 单张 try：某张异常只跳过这一张，不中断整批补图
+        try {
+          const img = makeImg(pending.shift(), imgs.length);
+          wrapper.appendChild(img); // 每补一张都会开始加载
+          extra++;
+        } catch (err) {
+          console.warn(
+            "[夜漫整章] 单张图片插入异常，已跳过: " + (err && err.message),
+          );
+          if (!pending.length) break; // 队列已空则退出，避免空转
+        }
       }
       if (!pending.length) {
         stopped = true;
@@ -335,7 +365,9 @@
     try {
       const q = window.qTcms_S_m_murl; // 站点已解码的整话图片列表
       if (typeof q !== "string" || !q) return; // 非阅读页或数据未就绪
-      const urls = q.split("$qingtiandy$").filter((x) => x && x.indexOf("http") === 0);
+      const urls = q
+        .split("$qingtiandy$")
+        .filter((x) => x && x.indexOf("http") === 0);
       if (urls.length <= 1) return; // 整话只有 1 张，无需处理
 
       const picImg = document.getElementById("qTcms_pic");
@@ -413,32 +445,37 @@
   };
 
   // 等待站点脚本把 qTcms_S_m_murl 解码完成后再展开（最长约 12 秒重试窗口）
+  // 入口包 try：它是 DOMContentLoaded/readystatechange 的直接回调，防止意外异常外抛
   const tryExpand = () => {
-    if (window.__ymExpanded) return;
-    if (!document.body) return;
-    if (
-      typeof window.qTcms_S_m_murl === "string" &&
-      window.qTcms_S_m_murl &&
-      document.getElementById("qTcms_pic")
-    ) {
-      setTimeout(expandChapter, 400); // 留时间给站点渲染第一张
-      return;
-    }
-    let retries = 0;
-    const iv = setInterval(() => {
-      retries++;
+    try {
+      if (window.__ymExpanded) return;
+      if (!document.body) return;
       if (
-        window.__ymExpanded ||
-        (typeof window.qTcms_S_m_murl === "string" &&
-          window.qTcms_S_m_murl &&
-          document.getElementById("qTcms_pic"))
+        typeof window.qTcms_S_m_murl === "string" &&
+        window.qTcms_S_m_murl &&
+        document.getElementById("qTcms_pic")
       ) {
-        clearInterval(iv);
-        if (!window.__ymExpanded) setTimeout(expandChapter, 400);
-      } else if (retries > 60) {
-        clearInterval(iv); // 超时放弃（非阅读页）
+        setTimeout(expandChapter, 400); // 留时间给站点渲染第一张
+        return;
       }
-    }, 200);
+      let retries = 0;
+      const iv = setInterval(() => {
+        retries++;
+        if (
+          window.__ymExpanded ||
+          (typeof window.qTcms_S_m_murl === "string" &&
+            window.qTcms_S_m_murl &&
+            document.getElementById("qTcms_pic"))
+        ) {
+          clearInterval(iv);
+          if (!window.__ymExpanded) setTimeout(expandChapter, 400);
+        } else if (retries > 60) {
+          clearInterval(iv); // 超时放弃（非阅读页）
+        }
+      }, 200);
+    } catch (e) {
+      console.warn("[夜漫整章] tryExpand 异常: " + e.message);
+    }
   };
 
   // 按页面加载状态尽早触发（第二部分对非阅读页是无害的空转）
