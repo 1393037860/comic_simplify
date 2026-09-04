@@ -1,11 +1,17 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  夜漫(m.yueman1.cc)整合脚本：①移除顶部/底部广告与点击劫持(wap_show广告SDK) ②阅读页整话连看(增量懒加载，防封IP)
+// @version      1.6
+// @description  夜漫(yueman1)系 + 图蛋(tudanmanhua/tudanmh)系：移除顶部/底部广告与点击劫持，阅读页整话连看(增量懒加载)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
 // @match        https://m.yueman1.cc/*
+// @match        http://m.tudanmanhua.cc/*
+// @match        https://m.tudanmanhua.cc/*
+// @match        http://www.tudanmanhua.cc/*
+// @match        http://m.tudanmh.cc/*
+// @match        https://m.tudanmh.cc/*
+// @match        http://www.tudanmh.cc/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=yueman1.cc
 // @grant        none
 // @run-at       document-start
@@ -26,6 +32,8 @@
 //     之前按透明度/尺寸过滤漏判), 上下热区拦截触摸导致点击跳广告; 新增按超高 z-index 直删的清理
 // 1.5 增强: 透明点击层/广告位清理接入 MutationObserver(DOM 变化即清, 注入后毫秒级移除);
 //     "广告跳转回滚"事件写入诊断日志(便于 dump 验证)
+// 1.6 扩展: 支持同族镜像域名 图蛋(m.tudanmanhua.cc / m.tudanmh.cc 等): 通用去广告保护全覆盖;
+//     整章连看仅在该站阅读页结构同 QTcms(含 qTcms_S_m_murl/#qTcms_pic)时生效
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
@@ -85,6 +93,10 @@
     "reman.cc",
     "pgu.cc",
     "sfacg.com",
+    "tudanmanhua.cc",
+    "tudanmh.cc",
+    "tudan.cc",
+    "ac.qq.com",
   ];
 
   const isAllowedHost = (hostname) =>
