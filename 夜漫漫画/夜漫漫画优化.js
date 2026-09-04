@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.5
 // @description  夜漫(m.yueman1.cc)整合脚本：①移除顶部/底部广告与点击劫持(wap_show广告SDK) ②阅读页整话连看(增量懒加载，防封IP)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -15,6 +15,17 @@
 // 1.1 修复: 点击拦截误伤 javascript: 伪链接（搜索/分享等 onClick 按钮），导致面板打不开并报
 //     Uncaught TypeError: Cannot read properties of null (reading 'removeChild');
 //     改为仅拦截真正跳转的外站 http(s) 链接，伪链接/锚点/非网页协议一律放行
+// 1.2 增强: 后置兜底清理(适配 Userscripts 等晚注入环境: 广告SDK已抢先运行时也清 wap_show 广告位/外域iframe);
+//     新增 ?ymdebug=1 屏幕诊断面板(手机端无需控制台即可定位残留广告); loadMore 单张异常隔离
+// 1.3 修复: 广告脚本已抢先运行(晚注入)时注入的"整宽横幅"仍在页面顶部/底部显示;
+//     新增通用横幅杀手(外站链接+图片的整宽块隐藏) + 白名单补充 baidu/taoman 等(不再误删分享/统计脚本);
+//     诊断面板改为自动弹出(发现残留广告即显示), 无需 URL 参数;
+//     面板新增"复制页面HTML"按钮(加载5秒后自动尝试), 供把广告真实结构发回分析;
+//     诊断面板事件护盾: 捕获阶段拦截指向面板的触摸/点击(防 SDK 残留劫持监听在底部热区误触发)
+// 1.4 修复: iPhone 残留"透明点击层"——fixed + z-index 2147483646 的隐形横条(无 opacity 属性,
+//     之前按透明度/尺寸过滤漏判), 上下热区拦截触摸导致点击跳广告; 新增按超高 z-index 直删的清理
+// 1.5 增强: 透明点击层/广告位清理接入 MutationObserver(DOM 变化即清, 注入后毫秒级移除);
+//     "广告跳转回滚"事件写入诊断日志(便于 dump 验证)
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
@@ -44,6 +55,19 @@
 (function () {
   "use strict";
 
+  // 诊断日志：记录本脚本移除过的广告脚本/元素（供 ?ymdebug=1 屏幕面板展示）
+  let removedLog = [];
+  const tsNow = () => {
+    try {
+      return new Date().toTimeString().split(" ")[0];
+    } catch (e) {
+      return "";
+    }
+  };
+  const logPush = (m) => {
+    removedLog.push("[" + tsNow() + "] " + m);
+  };
+
   // ============================================================
   // ================ 第一部分 · 去广告（整站生效） ================
   // ============================================================
@@ -52,9 +76,15 @@
   const ALLOWED_HOSTS = [
     "yueman1.cc",
     "gugu6.com",
+    "gugu5.com",
     "qtcms.com",
+    "taoman.cc",
+    "baidu.com",
     "bdimg.com",
     "bdstatic.com",
+    "reman.cc",
+    "pgu.cc",
+    "sfacg.com",
   ];
 
   const isAllowedHost = (hostname) =>
@@ -77,6 +107,7 @@
     if (s.dataset.ymAdBlocked === "1") return; // 已处理过则跳过（防重复日志）
     s.dataset.ymAdBlocked = "1";
     const src = s.getAttribute("src") || "(inline)";
+    logPush("移除脚本: " + src);
     s.remove(); // 下载完成前移除，阻止执行
     console.warn("[夜漫去广告] 已移除广告脚本: " + src);
   };
@@ -102,6 +133,9 @@
   const scriptObserver = new MutationObserver(() => {
     try {
       scanAdScripts();
+      // DOM 一变就顺手清透明点击层：广告注入后毫秒级移除，几乎不给显示/点击机会
+      if (typeof killInvisibleLayers === "function") killInvisibleLayers();
+      if (typeof killWapShowSlots === "function") killWapShowSlots();
     } catch (e) {}
   });
   const startScriptObserver = () => {
@@ -188,6 +222,7 @@
         if (isAllowedUrl(location.href)) {
           lastUrl = location.href; // 正常跳转（翻页/章节），更新基准
         } else {
+          logPush("检测到广告跳转并回滚: " + location.href);
           console.warn("[夜漫去广告] 检测到广告跳转，已跳回: " + location.href);
           location.href = lastUrl;
         }
@@ -229,6 +264,39 @@
   document.addEventListener("click", blockAdClick, true);
   document.addEventListener("auxclick", blockAdClick, true); // 中键
 
+  // 5b) 诊断面板事件护盾
+  // iPhone 晚注入场景：wap_show 已抢先执行，其 document 级 touchend/click 劫持监听
+  // 不会因删除脚本标签而消失；面板贴在屏幕底部(劫持热区)，直接点面板可能触发广告。
+  // 处理：捕获阶段拦截一切指向 #ym-dbg-panel 的事件，不让它到达 SDK 监听；
+  // 复制/关闭按钮由护盾自行处理（面板保留长期使用，不影响正文操作）。
+  const shieldPanel = (event) => {
+    try {
+      const t = event.target;
+      if (!t || typeof t.closest !== "function") return;
+      if (!t.closest("#ym-dbg-panel")) return; // 只保护面板区域，正文点击不受影响
+      if (event.type === "click") {
+        if (t.closest("#ym-dbg-copy")) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (typeof window.__ymCopyHtml === "function") window.__ymCopyHtml();
+          return;
+        }
+        if (t.closest("#ym-dbg-close")) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const p = document.getElementById("ym-dbg-panel");
+          if (p) p.style.display = "none";
+          return;
+        }
+      }
+      // 面板上的其它触摸/点击：只阻断传播(保留面板自身滚动等默认行为)
+      event.stopImmediatePropagation();
+    } catch (e) {}
+  };
+  ["touchstart", "touchend", "mousedown", "pointerdown", "pointerup", "click", "auxclick"].forEach(
+    (et) => document.addEventListener(et, shieldPanel, true),
+  );
+
   // ----- 6) 残留清理 -----
   // 若广告SDK在拦截前已经跑过（缓存/时序竞态），周期性清掉：
   // 透明 fixed 点击层(opacity≈0.01) 与 SDK 注入的 body 底部内边距样式
@@ -248,6 +316,366 @@
       if (s2) s2.remove();
     } catch (e) {}
   }, 1000);
+
+  // 透明点击层杀手：广告SDK(如 hongosi/mvp1p 等)注入的"隐形横条"通常没有 opacity 属性
+  // (默认透明背景即可隐形)，特征 = fixed + z-index 高达 2147483xxx(2147483646 常见) + 无可视内容。
+  // 它们拦截屏幕上下区域的触摸用于点击劫持；之前按 opacity/尺寸过滤会漏掉，这里按 z-index 直接清。
+  const killInvisibleLayers = () => {
+    try {
+      if (!document.body) return;
+      const divs = document.body.querySelectorAll("div[style]");
+      for (const el of divs) {
+        if (el.id === "ym-dbg-panel") continue; // 保留我们自己的诊断面板
+        const st = el.getAttribute("style") || "";
+        if (!/position\s*:\s*fixed/i.test(st)) continue;
+        if (!/z-?\s*index\s*:\s*2147483\d{3}/i.test(st)) continue;
+        // 无可视内容(文本/图/媒体)的固定层 = 透明点击层
+        const hasVisible = el.textContent && el.textContent.trim();
+        const hasMedia = el.querySelector("img, iframe, video, canvas");
+        if (hasVisible && !hasMedia) continue;
+        logPush("移除透明点击层: " + (el.id || el.tagName.toLowerCase()));
+        el.remove();
+      }
+    } catch (e) {}
+  };
+  setInterval(() => {
+    try {
+      killInvisibleLayers();
+    } catch (e) {}
+  }, 1000);
+
+  // ----- 7) 增强兜底清理（兼容 Userscripts 等"晚注入"：广告SDK可能已抢先执行）-----
+  // 场景：iOS Safari + Userscripts 的 document-start 时机不可靠，wap_show_1/2.js
+  // 可能已运行并往广告位(.img_001)注入内容。这里不管它跑没跑，都做二次清理：
+  //   a) 移除 wap_show 脚本标签（即使已执行，标签仍留在 DOM 里可定位）；
+  //   b) 隐藏其广告位容器（阅读页两个 .img_001 广告槽：内容一旦注入就连容器一起藏掉）；
+  //   c) 移除广告联盟注入的外域 iframe（本站正常页面没有任何 iframe）。
+  const killWapShowSlots = () => {
+    try {
+      if (!document.body) return;
+      // 0) 预防性隐藏阅读页的广告位容器(#currentCache/.view-imgBox 里的 .img_001)：
+      //    这两个槽位只用于放 wap_show 广告，无论 SDK 有没有抢先注入，都直接藏掉，
+      //    即使晚注入环境(SDK已运行)也看不到广告内容。
+      const slotTargets = document.querySelectorAll(
+        "#currentCache .img_001, .view-imgBox .img_001",
+      );
+      for (const slot of slotTargets) {
+        slot.style.setProperty("display", "none", "important");
+      }
+      const scs = document.querySelectorAll("script[src]");
+      for (const s of scs) {
+        if (!isAdSdkSrc(s.getAttribute("src") || "")) continue;
+        if (s.dataset.ymAdBlocked !== "1") {
+          logPush("兜底移除: " + s.getAttribute("src"));
+        }
+        let p = s.parentElement;
+        if (p) {
+          const cls = typeof p.className === "string" ? p.className : "";
+          if (cls.indexOf("img_001") !== -1 || p.children.length <= 1) {
+            p.style.setProperty("display", "none", "important"); // 连容器带内容一起藏
+          }
+        }
+        s.remove();
+      }
+      const frs = document.querySelectorAll("iframe[src]");
+      for (const f of frs) {
+        let h = "";
+        try {
+          h = new URL(f.getAttribute("src"), location.href).hostname;
+        } catch (e) {}
+        if (h && !isAllowedHost(h)) {
+          logPush("移除外域iframe: " + f.getAttribute("src"));
+          f.remove();
+        }
+      }
+    } catch (e) {}
+  };
+  // 通用横幅杀手：广告脚本(如 hhvcxhs d/4389)会往页面顶部/底部注入"外站链接+图片"的
+  // 整宽横幅，这类横幅是随文档流的(非 fixed、不在 .img_001 槽内)，前面清理抓不到。
+  // 这里针对"包含非白名单外链 + 图片、宽度占屏、高度适中的容器块"隐藏它。
+  const killBannerBlocks = () => {
+    try {
+      if (!document.body) return;
+      const vw = document.documentElement.clientWidth || window.innerWidth;
+      const anchors = document.body.querySelectorAll("a[href]");
+      for (const a of anchors) {
+        const href = a.getAttribute("href") || "";
+        if (!/^https?:/i.test(href)) continue;
+        let host = "";
+        try {
+          host = new URL(href, location.href).hostname;
+        } catch (e) {}
+        if (!host || isAllowedHost(host)) continue; // 站内/白名单外链不处理
+        // 向上找承载它的"横幅块"
+        let node = a;
+        for (let up = 0; up < 6 && node && node !== document.body; up++) {
+          node = node.parentElement;
+          if (!node) break;
+          const id = node.id || "";
+          const cls = typeof node.className === "string" ? node.className : "";
+          if (/ym-all-pics|qTcms_pic|reader-images|mh_box|commicBox|currentCache|read_Shar|m_r_title|m_r_bottom|layer|show\b/.test(id + " " + cls)) break; // 保护阅读区/站点UI
+          const r = node.getBoundingClientRect();
+          if (r.width < vw * 0.6 || r.height < 20 || r.height > 320) continue;
+          const inline = node.getAttribute("style") || "";
+          const hasImg = !!node.querySelector("img");
+          if (!hasImg && !/position|z-index|background|padding/i.test(inline)) continue;
+          // 命中横幅：隐藏并记录
+          node.style.setProperty("display", "none", "important");
+          logPush(
+            "隐藏广告横幅: " +
+              node.tagName.toLowerCase() +
+              "." +
+              (cls.split(/\s+/)[0] || "-") +
+              " 外链=" +
+              host,
+          );
+          break;
+        }
+      }
+    } catch (e) {}
+  };
+  setInterval(() => {
+    try {
+      scanAdScripts(); // 外域动态脚本再扫一轮
+      killWapShowSlots(); // wap_show 广告位兜底清理
+      killBannerBlocks(); // 注入的整宽横幅杀手
+    } catch (e) {}
+  }, 1500);
+
+  // ----- 8) 屏幕诊断（iPhone 无法开控制台时的定位手段，默认关闭）-----
+  // 平时完全不启用，不影响页面与性能。需要排查广告时二选一开启：
+  //   a) 网址后加 #ymdebug（hash 不发给服务器，不会被 404 拦截）；
+  //   b) 手动改下面 DEBUG_UI 为 true 后刷新（长期开启排查）。
+  // 开启后：检测到残留广告会自动弹出面板/描红框，并提供"复制页面HTML(发回分析)"按钮。
+  const DEBUG_UI =
+    /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash) ||
+    false; // 手动排查时可临时改为 true
+  if (DEBUG_UI) {
+    const WANT = /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash);
+    let panel = null;
+    let preEl = null;
+    let emptyRounds = 0;
+    let statusEl = null; // 复制按钮的状态提示行
+
+    const ensurePanel = () => {
+      if (panel) return panel;
+      panel = document.createElement("div");
+      panel.id = "ym-dbg-panel";
+      panel.style.cssText =
+        "position:fixed;left:6px;right:6px;bottom:6px;z-index:2147483647;" +
+        "max-height:45%;overflow:auto;background:rgba(20,20,30,.95);color:#ffe;" +
+        "font:11px/1.5 monospace;padding:6px;border-radius:8px;";
+      const close = document.createElement("span");
+      close.id = "ym-dbg-close";
+      close.textContent = "✕ 关闭诊断";
+      close.style.cssText =
+        "position:sticky;top:0;display:block;text-align:right;color:#f88;" +
+        "font:12px/1 sans-serif;cursor:pointer;";
+      close.onclick = () => {
+        panel.style.display = "none";
+      };
+      preEl = document.createElement("pre");
+      preEl.style.cssText =
+        "margin:0;white-space:pre-wrap;word-break:break-all;";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = "ym-dbg-copy";
+      btn.textContent = "📋 复制页面HTML(发回分析)";
+      btn.style.cssText =
+        "width:100%;margin:6px 0 2px;padding:10px;border:0;border-radius:6px;" +
+        "background:#2d6cdf;color:#fff;font:15px/1 sans-serif;";
+      btn.onclick = () => {
+        copyHtml();
+      };
+      statusEl = document.createElement("div");
+      statusEl.id = "ym-dbg-status";
+      statusEl.style.cssText =
+        "color:#9f9;font:12px/1.6 sans-serif;min-height:16px;";
+      panel.appendChild(close);
+      panel.appendChild(preEl);
+      panel.appendChild(btn);
+      panel.appendChild(statusEl);
+      return panel;
+    };
+
+    // 排除站点自身 UI / 我们自己的元素
+    const knownUi =
+      /m_r_title|m_r_bottom|action-list|HotTag|hotTit|messagSjr|read_Shar|img_001|ym-all-pics/;
+    const findSuspects = () => {
+      const out = [];
+      try {
+        if (!document.body) return out;
+        // 候选：内联 z-index/position、广告类标签与命名、外链 sponsor 链接等
+        const cands = document.body.querySelectorAll(
+          'ins, iframe[src], [style*="z-index"], [style*="position:fixed"],' +
+            '[class*="ad"], [class*="banner"], [id*="ad"], [id*="banner"],' +
+            '[class*="gg_"], div[style*="bottom:0"], div[style*="top:0"]',
+        );
+        for (const el of cands) {
+          if (panel && (el === panel || panel.contains(el))) continue; // 跳过诊断面板自身
+          if (el.closest && el.closest("#ym-all-pics")) continue; // 跳过整章长图
+          const cs = window.getComputedStyle(el);
+          if (cs.position !== "fixed" && cs.position !== "absolute") continue;
+          const z = parseInt(cs.zIndex, 10) || 0;
+          if (z < 100) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 40 || r.height < 20 || r.height > window.innerHeight * 0.6) continue;
+          const id = el.id || "";
+          const cls = typeof el.className === "string" ? el.className : "";
+          if (knownUi.test(id + " " + cls)) continue;
+          out.push(el);
+          if (out.length >= 10) break;
+        }
+      } catch (e) {}
+      return out;
+    };
+
+    // ---- 复制页面 HTML（把广告真实结构发回来分析）----
+    // iOS 限制：http 页面没有用户手势不能写剪贴板。先自动试一次(https 环境可成功)，
+    // 失败则提示点击面板上的复制按钮(点击=手势，execCommand 可复制)。
+    const getPageHtml = () => {
+      try {
+        const clone = document.documentElement.cloneNode(true);
+        // 移除本脚本产物，避免体积过大且干扰分析
+        const own = clone.querySelectorAll("#ym-all-pics, #ym-dbg-panel");
+        for (const el of Array.from(own)) el.remove();
+        // 去掉脚本/样式内容(体积大户，结构分析用不到)
+        const scripts = clone.querySelectorAll("script, style, link");
+        for (const el of Array.from(scripts)) el.remove();
+        // 头部注释内嵌诊断信息：时间/网址/脚本清理记录，便于判断广告何时出现/被清
+        const meta =
+          "<!-- YM-DEBUG\n" +
+          "时间: " +
+          new Date().toLocaleString() +
+          "\nURL: " +
+          location.href +
+          "\n屏幕: " +
+          window.innerWidth +
+          "x" +
+          window.innerHeight +
+          "\n清理记录(" +
+          removedLog.length +
+          "条):\n" +
+          (removedLog.length ? removedLog.join("\n") : "(无)") +
+          "\n-->\n";
+        return meta + clone.outerHTML.replace(/[ \t]{2,}/g, " ");
+      } catch (e) {
+        return "提取失败: " + e.message;
+      }
+    };
+    const copyToClipboard = (text) => {
+      return new Promise((resolve) => {
+        try {
+          if (
+            navigator.clipboard &&
+            navigator.clipboard.writeText &&
+            window.isSecureContext
+          ) {
+            navigator.clipboard
+              .writeText(text)
+              .then(() => resolve(true))
+              .catch(() => resolve(false));
+            return;
+          }
+        } catch (e) {}
+        try {
+          // http 兜底：隐藏 textarea + execCommand（需要点击手势）
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.cssText = "position:fixed;top:-100px;left:0;opacity:0;";
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          ta.setSelectionRange(0, text.length);
+          let ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch (e) {
+            ok = false;
+          }
+          document.body.removeChild(ta);
+          resolve(ok);
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    };
+    const copyHtml = async () => {
+      if (!statusEl) return;
+      statusEl.textContent = "提取HTML中…";
+      const html = getPageHtml();
+      if (html.length > 300000) {
+        statusEl.textContent = "HTML过大(" + html.length + "字符)，请先开 #ymdebug";
+        return;
+      }
+      const ok = await copyToClipboard(html);
+      statusEl.textContent = ok
+        ? "✅ 已复制 " + html.length + " 字符，去聊天框粘贴即可"
+        : "❌ 复制被拒：请再点一次复制按钮(iOS需点击手势)";
+    };
+    // 暴露给"面板事件护盾"(第1部分)在捕获阶段调用
+    window.__ymCopyHtml = copyHtml;
+    // 加载完约 5 秒后自动尝试一次（https 环境会直接成功；http 需靠上面的按钮）
+    setTimeout(() => {
+      try {
+        if (!window.__ymHtmlCopied && document.body && statusEl) {
+          copyHtml();
+          window.__ymHtmlCopied = true;
+        }
+      } catch (e) {}
+    }, 5000);
+
+    const upd = () => {
+      try {
+        const sups = findSuspects();
+        const has = sups.length > 0 || removedLog.length > 0;
+        if (!has && !WANT) {
+          emptyRounds++;
+          if (emptyRounds > 2 && panel) panel.style.display = "none";
+          return; // 页面干净，不打扰
+        }
+        emptyRounds = 0;
+        const p = ensurePanel();
+        p.style.display = "block";
+        if (!p.isConnected && (document.body || document.documentElement)) {
+          (document.body || document.documentElement).appendChild(p);
+        }
+        const lines = [];
+        lines.push("【夜漫优化·诊断】移除记录(" + removedLog.length + "):");
+        lines.push(removedLog.length ? removedLog.slice(-12).join("\n") : "(无)");
+        lines.push("【疑似广告元素(已描红框)】");
+        if (sups.length) {
+          for (const el of sups) {
+            el.style.outline = "2px solid red";
+            const r = el.getBoundingClientRect();
+            const cls = typeof el.className === "string" ? el.className : "";
+            lines.push(
+              "#" +
+                el.tagName.toLowerCase() +
+                "." +
+                (cls.split(/\s+/)[0] || "-") +
+                (el.id ? " id=" + el.id : "") +
+                " z=" +
+                window.getComputedStyle(el).zIndex +
+                " 顶=" +
+                Math.round(r.top) +
+                " 高=" +
+                Math.round(r.height) +
+                " 宽=" +
+                Math.round(r.width),
+            );
+          }
+          lines.push("(红框元素即被标记的可疑广告，把这一屏截图发回即可)");
+        } else {
+          lines.push("(当前未发现可疑悬浮元素)");
+        }
+        preEl.textContent = lines.join("\n");
+      } catch (e) {}
+    };
+    upd();
+    setInterval(upd, 2000);
+  }
 
   // ============================================================
   // =============== 第二部分 · 整章连看（仅阅读页生效） ================
