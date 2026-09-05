@@ -155,6 +155,7 @@
       // DOM 一变就顺手清透明点击层：广告注入后毫秒级移除，几乎不给显示/点击机会
       if (typeof killInvisibleLayers === "function") killInvisibleLayers();
       if (typeof killWapShowSlots === "function") killWapShowSlots();
+      if (typeof killCustomAds === "function") killCustomAds();
     } catch (e) {}
   });
   const startScriptObserver = () => {
@@ -366,6 +367,55 @@
     } catch (e) {}
   }, 1000);
 
+  // 随机自定义标签广告杀手（dhnefm / llkmdam 等）：
+  // 广告SDK会在 body 最前插入"空占位自定义标签"(内联 style 定尺寸, 如 height:131px)，
+  // 或注入伪装成去广告的 <link id=via_inject_css_blocker> 样式表(由站点域名提供, 把广告画进占位)。
+  // 标准 HTML 标签清单用于识别"非标准=注入的自定义标签"
+  const STANDARD_TAGS =
+    "a abbr address area article aside audio b base bdi bdo blockquote body br button canvas caption " +
+    "cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption " +
+    "figure footer form h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend " +
+    "li link main map mark menu meta meter nav noscript object ol optgroup option output p param picture pre " +
+    "progress q rp rt ruby s samp script section select slot small source span strong style sub summary sup " +
+    "table tbody td template textarea tfoot th thead time title tr track u ul var video wbr".split(" ");
+
+  const killCustomAds = () => {
+    try {
+      if (!document.body) return;
+      const stTags = new Set(STANDARD_TAGS);
+      const all = document.body.querySelectorAll("*");
+      for (const el of all) {
+        if (el.id === "ym-dbg-panel") continue;
+        if (el.closest && el.closest("#ym-all-pics")) continue; // 跳过整章长图
+        if (el.tagName === "LINK") {
+          // 注入的"去广告伪装"样式表(实为广告渲染源)
+          const href = el.getAttribute("href") || "";
+          const id = el.id || "";
+          if (/via_inject/i.test(href + " " + id)) {
+            logPush("移除注入样式link: " + href);
+            el.remove();
+          }
+          continue;
+        }
+        const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        if (!tag || stTags.has(tag)) continue; // 标准标签交给其它规则处理
+        // 非标准自定义标签 = 广告占位/容器候选
+        const inline = el.getAttribute("style") || "";
+        const hasChild =
+          el.querySelector && el.querySelector("a[href], img, iframe, ins");
+        const text = (el.textContent || "").trim();
+        if (!inline && !hasChild && text.length === 0) continue;
+        logPush(
+          "移除自定义标签广告 <" +
+            tag +
+            (el.id ? "#" + el.id : "") +
+            (inline ? " 样式:" + inline.slice(0, 80) : ""),
+        );
+        el.remove();
+      }
+    } catch (e) {}
+  };
+
   // ----- 7) 增强兜底清理（兼容 Userscripts 等"晚注入"：广告SDK可能已抢先执行）-----
   // 场景：iOS Safari + Userscripts 的 document-start 时机不可靠，wap_show_1/2.js
   // 可能已运行并往广告位(.img_001)注入内容。这里不管它跑没跑，都做二次清理：
@@ -461,6 +511,7 @@
       scanAdScripts(); // 外域动态脚本再扫一轮
       killWapShowSlots(); // wap_show 广告位兜底清理
       killBannerBlocks(); // 注入的整宽横幅杀手
+      killCustomAds(); // 随机自定义标签/伪装样式表
     } catch (e) {}
   }, 1500);
 
