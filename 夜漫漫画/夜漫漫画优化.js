@@ -193,6 +193,45 @@
   startScriptObserver();
   scanAdScripts(); // 立即扫一次（先于站点脚本执行）
 
+  // ---- 阅读器UI移除监控(调试用)：谁动了 标题栏/底栏/阅读区 一看便知 ----
+  // 本脚本从不删除标准元素；若此处报警且同一时刻没有本脚本的"移除/隐藏"日志，
+  // 说明是广告SDK或站点代码在删阅读器框架(排查 subHeader/control_bottom 消失问题)
+  const uiWatchRegex =
+    /m_r_title|m_r_bottom|control_bottom|subHeader|UnderPage|currentCache|commicBox|mh_box/;
+  try {
+    const uiWatch = new MutationObserver((muts) => {
+      try {
+        for (const m of muts) {
+          if (!m.removedNodes || !m.removedNodes.length) continue;
+          for (const n of m.removedNodes) {
+            if (!n || n.nodeType !== 1) continue;
+            const cls = typeof n.className === "string" ? n.className : "";
+            if (uiWatchRegex.test((n.id || "") + " " + cls)) {
+              logPush(
+                "⚠ 站点UI被移除: <" +
+                  n.tagName.toLowerCase() +
+                  (n.id ? " id=" + n.id : "") +
+                  (cls ? " class=" + cls : ""),
+              );
+              console.warn("[YM-UI] 检测到UI被移除:", n.tagName.toLowerCase(), n.id, cls);
+            }
+          }
+        }
+      } catch (e) {}
+    });
+    const startUiWatch = () => {
+      if (!document.documentElement) {
+        setTimeout(startUiWatch, 10);
+        return;
+      }
+      uiWatch.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    };
+    startUiWatch();
+  } catch (e) {}
+
   // ----- 2) WebSocket 拦截 -----
   // 广告SDK对夸克/UC/MIUI 等国产浏览器走 wss://... 广告通道，命中白名单外一律给空壳
   try {
@@ -938,6 +977,9 @@
       if (!pending.length) {
         // 队列耗尽：停止监听与轮询
         stopped = true;
+        console.log(
+          "[YM-LOAD] 队列已空，停止补图 (共插入 " + wrapper.children.length + " 张)",
+        );
         window.removeEventListener("scroll", scheduleLoad, { passive: true });
         window.removeEventListener("resize", scheduleLoad, { passive: true });
         return;
@@ -951,12 +993,15 @@
         if (r.top + window.scrollY > fold + 1) extra++;
         else break; // 碰到可视区内的图片即停止计数
       }
+      const before = pending.length;
+      let appended = 0;
       while (pending.length && extra < BUFFER) {
         // 单张 try：某张异常只跳过这一张，不中断整批补图
         try {
           const img = makeImg(pending.shift(), imgs.length);
           wrapper.appendChild(img); // 每补一张都会开始加载
           extra++;
+          appended++;
         } catch (err) {
           console.warn(
             "[夜漫整章] 单张图片插入异常，已跳过: " + (err && err.message),
@@ -964,8 +1009,29 @@
           if (!pending.length) break; // 队列已空则退出，避免空转
         }
       }
+      console.log(
+        "[YM-LOAD] 补图 +" +
+          appended +
+          " 张 | 队列余 " +
+          pending.length +
+          "/" +
+          before +
+          " | extra=" +
+          extra +
+          " 已插入=" +
+          wrapper.children.length +
+          " | scrollY=" +
+          Math.round(window.scrollY) +
+          " 视口高=" +
+          window.innerHeight +
+          " fold=" +
+          Math.round(fold),
+      );
       if (!pending.length) {
         stopped = true;
+        console.log(
+          "[YM-LOAD] 全部加载完成 (共 " + wrapper.children.length + " 张)",
+        );
         window.removeEventListener("scroll", scheduleLoad, { passive: true });
         window.removeEventListener("resize", scheduleLoad, { passive: true });
       }
