@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.0
 // @description  夜漫(yueman1)系 + 图蛋(tudanmanhua/tudanmh)系：移除顶部/底部广告与点击劫持，阅读页整话连看(增量懒加载)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -51,6 +51,10 @@
 // 1.9(整章)修复: 整章连看由"replaceChild 站点单图祖先节点"改为"只追加、不删除"——
 //     老模板中该祖先可能是承载整页布局的大节点, 替换会连 share~页脚 之间内容一并带走致整页空白;
 //     现仅向单图容器追加长图流, 站点原图保留到首图加载完成(3.5s兜底)再隐藏, 避免首屏"先白后图"
+// 2.0 修复: 新增站内广告SDK黑名单 —— /js/sy*.js(如 sy2.js, 注入 Vxop/Mhvp 空壳+mfpm/wzbm 占位+
+//     kUyi CSS雪碧点击格)、wapquanzhan.js 等; 同时新增"广告产物残留清理"(结构性判定,
+//     随机命名也兜底: 空自定义占位/雪碧格(内联bg-position+bg-size无内容)/Vxop-Mhvp-kUyi 空壳),
+//     即使 SDK 已抢先执行也能把注入的 DOM 清干净; 全程不触碰任何标准 HTML 元素
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
