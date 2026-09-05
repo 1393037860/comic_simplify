@@ -746,27 +746,28 @@
     return normalize(url);
   };
 
-  // 动态候选源序列：原始地址 → 站点自己的转换地址(防盗链/代理)。
   // 不做第三方镜像池轮换：本站为搬运站，额外枚举他人 CDN 绕防盗链既不合适也难维护；
   // 与网站自身加载行为保持一致，个别镜像整体失效时该图灰框占位即可(记录供查)。
-  const buildCandidates = (raw) => {
-    const out = [];
-    const push = (u) => {
-      if (u && !out.includes(u)) out.push(u);
-    };
-    push(raw);
-    try {
-      push(toRealPic(raw));
-    } catch (e) {}
-    return out;
-  };
+
+  // 图片创建/重试的最大次数
+  const MAX_IMG_ATTEMPTS = 5;
 
   // 创建单张图片元素；失败时自动按候选源序列重试(动态换源)，全部失败才标记占位
   const makeImg = (rawUrl, idx) => {
     const img = document.createElement("img");
-    const candidates = buildCandidates(rawUrl);
+    const pick = (n) => {
+      if (n === 0) return rawUrl;
+      // 每轮重新调用站点转换函数：其内部对 manhuaju 等老源会随机挑镜像，
+      // 多试几轮可命中未被限流的镜像(属站点自身机制, 不额外枚举第三方CDN)
+      try {
+        if (typeof window.f_qTcms_Pic_curUrl_realpic === "function") {
+          return window.f_qTcms_Pic_curUrl_realpic(String(rawUrl));
+        }
+      } catch (e) {}
+      return toRealPic(rawUrl);
+    };
     let attempt = 0;
-    img.src = candidates[attempt] || rawUrl;
+    img.src = pick(0);
     img.alt = "第" + (idx + 1) + "页";
     img.style.cssText =
       "display:block;width:100%;height:auto;margin:0 auto;border:0;";
@@ -774,15 +775,15 @@
     img.addEventListener("load", scheduleLoad);
     img.addEventListener("error", () => {
       attempt++;
-      if (attempt < candidates.length) {
-        img.src = candidates[attempt]; // 换下一个可用源
+      if (attempt < MAX_IMG_ATTEMPTS) {
+        img.src = pick(attempt); // 换下一个候选源
         return;
       }
-      // 全部候选都失败：标记占位并记录(便于后续补源)
+      // 全部候选都失败：标记占位并记录(便于后续排查)
       img.style.outline = "1px dashed #999";
       img.style.minHeight = "40px";
       logPush(
-        "图片全部源失败(" + candidates.length + "个): " + String(rawUrl).slice(0, 110),
+        "图片全部源失败(试" + MAX_IMG_ATTEMPTS + "次): " + String(rawUrl).slice(0, 110),
       );
     });
     return img;
