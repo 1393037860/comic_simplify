@@ -58,7 +58,7 @@
 //   避免一次性并发请求全部图片被 CDN/风控封 IP。
 //
 // 【配置项】：
-//   - BUFFER（整章连看用）：可视区下方预加载的冗余图片张数，默认 5，可自行增减
+//   - BUFFER（整章连看用）：可视区下方预加载的冗余图片张数，当前 1（最保守），可自行增减
 //   - ALLOWED_HOSTS（去广告用）：放行域名白名单，命中白名单的脚本/跳转/WebSocket 不拦截
 //   - isAdSdkSrc 正则：命中的脚本路径会被移除（现匹配 g_js/wap_show_*.js）
 
@@ -701,8 +701,8 @@
   // ============================================================
   // 非阅读页没有 qTcms_S_m_murl / #qTcms_pic，tryExpand 会自动跳过，不影响其它页面。
 
-  // 可视区下方预加载的冗余图片张数（防一次性大量请求，可按需改 3~8）
-  const BUFFER = 5;
+  // 可视区下方预加载的冗余图片张数（防一次性大量请求，可按需改 0~3；1=最保守）
+  const BUFFER = 1;
 
   // ----- 图片地址规整 -----
   // 复刻站点 f_qTcms_Pic_curUrl_realpic 的主要防盗链替换，把各类图源直链化
@@ -767,7 +767,8 @@
       return toRealPic(rawUrl);
     };
     let attempt = 0;
-    img.src = pick(0);
+    let lastSrc = pick(0);
+    img.src = lastSrc;
     img.alt = "第" + (idx + 1) + "页";
     img.style.cssText =
       "display:block;width:100%;height:auto;margin:0 auto;border:0;";
@@ -775,17 +776,27 @@
     img.addEventListener("load", scheduleLoad);
     img.addEventListener("error", () => {
       attempt++;
-      if (attempt < MAX_IMG_ATTEMPTS) {
-        img.src = pick(attempt); // 换下一个候选源
+      if (attempt >= MAX_IMG_ATTEMPTS) {
+        failImg();
         return;
       }
-      // 全部候选都失败：标记占位并记录(便于后续排查)
+      const next = pick(attempt);
+      // 与上次相同/无新候选：死源(如 DNS 已注销)重试无意义，立即放弃，避免重复请求刷爆 Network
+      if (!next || next === lastSrc) {
+        failImg();
+        return;
+      }
+      lastSrc = next;
+      img.src = next; // 换新候选源
+    });
+    // 最终失败：标记占位并记录(便于后续排查)
+    const failImg = () => {
       img.style.outline = "1px dashed #999";
       img.style.minHeight = "40px";
       logPush(
-        "图片全部源失败(试" + MAX_IMG_ATTEMPTS + "次): " + String(rawUrl).slice(0, 110),
+        "图片全部源失败(试" + attempt + "次): " + String(rawUrl).slice(0, 110),
       );
-    });
+    };
     return img;
   };
 
