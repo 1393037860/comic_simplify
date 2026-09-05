@@ -144,6 +144,29 @@
     /wapquanzhan\.js/i.test(src || "") ||
     /(?:^|\/)wap_show\d*\.js/i.test(src || "");
 
+  // 广告网络域名黑名单(后缀匹配)：仅这些域名的脚本/iframe 会被删除。
+  // 注意：采用"黑名单制"而非"白名单制"——不再误删百度/360 等合法第三方脚本
+  // (曾因误删 js.passport.qihucdn.com / s8.qhres2.com(360) 导致站点初始化失败/章节列表不显示)
+  const AD_HOST_SUFFIXES = [
+    "hhvcxhs.com",
+    "zlvltzu.com",
+    "lextvep.com",
+    "mweuqci.com",
+    "kqlxvmz.com",
+    "jpgsxyy.com",
+    "szjpplo.com",
+    "rcxjpah.com",
+    "ojycbtg.com",
+    "exjbhod.com",
+    "wszwhg.net",
+    "wszwhg123.n1et",
+    "xn--tlqz3aj77agil76ww4ni2k.com", // hongosi 广告域名(punycode)
+  ];
+  const isAdHostHost = (host) =>
+    AD_HOST_SUFFIXES.some(
+      (h) => host === h || (host && host.endsWith("." + h)),
+    );
+
   const neutralizeScript = (s) => {
     if (s.dataset.ymAdBlocked === "1") return; // 已处理过则跳过（防重复日志）
     s.dataset.ymAdBlocked = "1";
@@ -153,7 +176,7 @@
     console.warn("[夜漫去广告] 已移除广告脚本: " + src);
   };
 
-  // 扫描当前所有 <script src>：命中广告 SDK 路径或外域脚本一律移除
+  // 扫描当前所有 <script src>：命中广告 SDK 路径或广告网络域名黑名单才移除
   const scanAdScripts = () => {
     try {
       const list = document.querySelectorAll("script[src]");
@@ -163,7 +186,7 @@
         try {
           host = new URL(src, location.href).hostname;
         } catch (e) {}
-        if (isAdSdkSrc(src) || (host && !isAllowedHost(host))) {
+        if (isAdSdkSrc(src) || isAdHostHost(host)) {
           neutralizeScript(s);
         }
       }
@@ -606,7 +629,7 @@
         try {
           h = new URL(f.getAttribute("src"), location.href).hostname;
         } catch (e) {}
-        if (h && !isAllowedHost(h)) {
+        if (isAdHostHost(h)) {
           logPush("移除外域iframe: " + f.getAttribute("src"));
           f.remove();
         }
