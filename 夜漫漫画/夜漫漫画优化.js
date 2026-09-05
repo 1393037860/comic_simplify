@@ -384,6 +384,8 @@
     "table tbody td template textarea tfoot th thead time title tr track u ul var video wbr".split(" ");
 
   const killCustomAds = () => {
+    // 二分调试开关：#ymnocustom 时跳过本清理(排查整页被清空问题用)
+    if (/(?:^|[&#])ymnocustom(?:$|[&#])/.test(location.hash)) return;
     try {
       if (!document.body) return;
       const stTags = new Set(STANDARD_TAGS);
@@ -931,6 +933,8 @@
   // 主流程：把站点的单张翻页阅读器替换为整话长图流
   const expandChapter = () => {
     try {
+      // 二分调试开关：#ymnoexpand 时跳过整章连看(排查页面被清空是否与本模块相关)
+      if (/(?:^|[&#])ymnoexpand(?:$|[&#])/.test(location.hash)) return;
       // "外链话"(qTcms_dongman 非空) 是跳外链/APP 的章节，非本页内联图，无法展开，跳过
       const dg = window.qTcms_dongman;
       if (typeof dg === "string" && dg) return;
