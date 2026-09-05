@@ -479,6 +479,26 @@
     try {
       if (!document.body) return;
       const stTags = new Set(STANDARD_TAGS);
+      // 站点阅读器UI/内容区硬防护：这些区域内外一律不碰(即便被误判也不删)
+      const isSiteContent = (el) => {
+        const c = typeof el.className === "string" ? el.className : "";
+        if (/m_r_title|m_r_bottom|subHeader|control_bottom/.test((el.id || "") + " " + c)) return true;
+        if (el.closest && el.closest(".UnderPage, #currentCache, #commicBox, .mh_box, #ym-all-pics")) return true;
+        return false;
+      };
+      // 带原因/身份的删除(便于日志实锤是谁删了什么)
+      const removeWithLog = (el, why) => {
+        const c = typeof el.className === "string" ? el.className : "";
+        logPush(
+          "killCustomAds移除: <" +
+            el.tagName.toLowerCase() +
+            (el.id ? "#" + el.id : "") +
+            (c ? "." + c.split(/\s+/)[0] : "") +
+            "> 原因:" +
+            why,
+        );
+        el.remove();
+      };
       const all = document.body.querySelectorAll("*");
       for (const el of all) {
         if (el.id === "ym-dbg-panel") continue;
@@ -488,13 +508,13 @@
           const href = el.getAttribute("href") || "";
           const id = el.id || "";
           if (/via_inject/i.test(href + " " + id)) {
-            logPush("移除注入样式link: " + href);
-            el.remove();
+            removeWithLog(el, "via_inject伪装样式表");
           }
           continue;
         }
         const tag = el.tagName ? el.tagName.toLowerCase() : "";
         if (!tag || stTags.has(tag)) continue; // 标准标签交给其它规则处理
+        if (isSiteContent(el)) continue; // 站点内容区/阅读器UI硬防护
         // 非标准自定义标签：仅当带"强广告特征"才删，宁可漏不可误杀(避免误删页面内容)
         const inline = el.getAttribute("style") || "";
         const strongStyle =
@@ -511,18 +531,13 @@
           } catch (e) {}
         }
         if (!strongStyle && !hasForeign) continue; // 无强特征: 保留(可能是页面合法内容)
-        logPush(
-          "移除自定义标签广告 <" +
-            tag +
-            (el.id ? "#" + el.id : "") +
-            (inline ? " 样式:" + inline.slice(0, 80) : ""),
-        );
-        el.remove();
+        removeWithLog(el, "自定义标签+强特征");
       }
 
       // ---- 广告产物残留清理（sy2.js 等站内SDK已注入的 DOM, 即使脚本已删也清掉）----
       const kids = Array.from(document.body.children);
       for (const el of kids) {
+        if (isSiteContent(el)) continue; // 阅读器UI/内容区硬防护
         const id = el.id || "";
         const cls = typeof el.className === "string" ? el.className : "";
         const st = el.getAttribute("style") || "";
@@ -531,14 +546,12 @@
           el.children.length === 0 && !(el.textContent || "").trim();
         // 已知空壳(不同会话随机命名, 结构性判定兜底)
         if (id === "Vxop" || id === "Mhvp" || /^kUyi/i.test(id + " " + cls)) {
-          logPush("移除广告空壳 <" + tag + (id ? "#" + id : "") + ">");
-          el.remove();
+          removeWithLog(el, "广告空壳");
           continue;
         }
         // 直挂 body 的空自定义标签占位(dhnefm/wzbm/mfpm 类, 站点本身无自定义标签)
         if (!stTags.has(tag) && noContent) {
-          logPush("移除自定义占位 <" + tag + ">");
-          el.remove();
+          removeWithLog(el, "自定义空占位");
           continue;
         }
         // CSS雪碧点击格: 内联 bg-position+bg-size、无内容的小 div(kUyi_0_0 这类)
@@ -548,8 +561,7 @@
           /background-position/i.test(st) &&
           /background-size/i.test(st)
         ) {
-          logPush("移除雪碧点击格 <div" + (id ? "#" + id : "") + ">");
-          el.remove();
+          removeWithLog(el, "雪碧点击格");
         }
       }
     } catch (e) {}
