@@ -335,8 +335,11 @@
   const killInvisibleLayers = () => {
     try {
       if (!document.body) return;
-      const divs = document.body.querySelectorAll("div[style]");
-      for (const el of divs) {
+      // 不限 div：广告容器会用随机命名的"自定义标签"(如 llkmdam / QcFkBh 等)包装
+      const styled = document.body.querySelectorAll("[style]");
+      for (const el of styled) {
+        const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        if (tag === "style" || tag === "link" || tag === "script") continue;
         if (el.id === "ym-dbg-panel") continue; // 保留我们自己的诊断面板
         const st = el.getAttribute("style") || "";
         if (!/position\s*:\s*fixed/i.test(st)) continue;
@@ -345,7 +348,7 @@
         const hasVisible = el.textContent && el.textContent.trim();
         const hasMedia = el.querySelector("img, iframe, video, canvas");
         if (hasVisible && !hasMedia) continue;
-        logPush("移除透明点击层: " + (el.id || el.tagName.toLowerCase()));
+        logPush("移除透明点击层: <" + tag + (el.id ? "#" + el.id : "") + ">");
         el.remove();
       }
     } catch (e) {}
@@ -459,11 +462,10 @@
   //   a) 网址后加 #ymdebug（hash 不发给服务器，不会被 404 拦截）；
   //   b) 手动改下面 DEBUG_UI 为 true 后刷新（长期开启排查）。
   // 开启后：检测到残留广告会自动弹出面板/描红框，并提供"复制页面HTML(发回分析)"按钮。
-  const DEBUG_UI =
-    /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash) ||
-    false; // 手动排查时可临时改为 true
+  const DEBUG_UI = true; // ⚠ 调试期强制开启；排查完毕改回：仅 #ymdebug 或 false
   if (DEBUG_UI) {
-    const WANT = /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash);
+    // 调试期: 面板常显(即使页面干净也显示状态)；排查完可改回仅 #ymdebug 时显示
+    const WANT = true;
     let panel = null;
     let preEl = null;
     let emptyRounds = 0;
@@ -714,6 +716,8 @@
       ["http://f2-img.534zm.com", "https://t2.taoman.cc"],
     ];
     for (const [a, b] of reps) v = v.split(a).join(b);
+    // s1/s2 CDN 的 /scomic/ 图源一律走 p8.taoman 代理（防盗链，原域名直连打不开）
+    v = v.replace(/https:\/\/s[12]\.[^/]+(\/scomic\/)/g, "https://p8.taoman.cc$1");
     return v;
   };
 
@@ -724,18 +728,57 @@
   let rafPending = false; // requestAnimationFrame 节流标志
   let intervalId = null; // 800ms 兜底轮询句柄
 
-  // 创建单张图片元素；load 后触发补位检查，error 时标记占位不中断
-  const makeImg = (url, idx) => {
+  // 图片地址统一转换：优先用站点自己的 f_qTcms_Pic_curUrl_realpic（含完整防盗链链，
+  // 覆盖各图源分支），保证与不开脚本时完全一致；站点函数不可用时才退回 normalize。
+  const toRealPic = (url) => {
+    try {
+      if (
+        typeof window.f_qTcms_Pic_curUrl_realpic === "function"
+      ) {
+        return window.f_qTcms_Pic_curUrl_realpic(String(url));
+      }
+    } catch (e) {}
+    return normalize(url);
+  };
+
+  // 动态候选源序列：原始地址 → 站点自己的转换地址(防盗链/代理)。
+  // 不做第三方镜像池轮换：本站为搬运站，额外枚举他人 CDN 绕防盗链既不合适也难维护；
+  // 与网站自身加载行为保持一致，个别镜像整体失效时该图灰框占位即可(记录供查)。
+  const buildCandidates = (raw) => {
+    const out = [];
+    const push = (u) => {
+      if (u && !out.includes(u)) out.push(u);
+    };
+    push(raw);
+    try {
+      push(toRealPic(raw));
+    } catch (e) {}
+    return out;
+  };
+
+  // 创建单张图片元素；失败时自动按候选源序列重试(动态换源)，全部失败才标记占位
+  const makeImg = (rawUrl, idx) => {
     const img = document.createElement("img");
-    img.src = normalize(url);
+    const candidates = buildCandidates(rawUrl);
+    let attempt = 0;
+    img.src = candidates[attempt] || rawUrl;
     img.alt = "第" + (idx + 1) + "页";
     img.style.cssText =
       "display:block;width:100%;height:auto;margin:0 auto;border:0;";
     img.setAttribute("decoding", "async");
     img.addEventListener("load", scheduleLoad);
     img.addEventListener("error", () => {
+      attempt++;
+      if (attempt < candidates.length) {
+        img.src = candidates[attempt]; // 换下一个可用源
+        return;
+      }
+      // 全部候选都失败：标记占位并记录(便于后续补源)
       img.style.outline = "1px dashed #999";
       img.style.minHeight = "40px";
+      logPush(
+        "图片全部源失败(" + candidates.length + "个): " + String(rawUrl).slice(0, 110),
+      );
     });
     return img;
   };
@@ -803,6 +846,9 @@
   // 主流程：把站点的单张翻页阅读器替换为整话长图流
   const expandChapter = () => {
     try {
+      // "外链话"(qTcms_dongman 非空) 是跳外链/APP 的章节，非本页内联图，无法展开，跳过
+      const dg = window.qTcms_dongman;
+      if (typeof dg === "string" && dg) return;
       const q = window.qTcms_S_m_murl; // 站点已解码的整话图片列表
       if (typeof q !== "string" || !q) return; // 非阅读页或数据未就绪
       const urls = q
