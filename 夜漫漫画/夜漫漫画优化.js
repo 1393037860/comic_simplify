@@ -515,14 +515,17 @@
       // 带原因/身份的删除(便于日志实锤是谁删了什么)
       const removeWithLog = (el, why) => {
         const c = typeof el.className === "string" ? el.className : "";
-        logPush(
-          "killCustomAds移除: <" +
-            el.tagName.toLowerCase() +
-            (el.id ? "#" + el.id : "") +
-            (c ? "." + c.split(/\s+/)[0] : "") +
-            "> 原因:" +
-            why,
-        );
+        const desc =
+          "<" +
+          el.tagName.toLowerCase() +
+          (el.id ? "#" + el.id : "") +
+          (c ? "." + c.split(/\s+/)[0] : "") +
+          "> 原因:" +
+          why +
+          " 样式:" +
+          ((el.getAttribute("style") || "").slice(0, 100) || "-");
+        logPush("killCustomAds移除: " + desc);
+        console.warn("[YM-KILL] " + desc);
         el.remove();
       };
       const all = document.body.querySelectorAll("*");
@@ -561,6 +564,26 @@
       }
 
       // ---- 广告产物残留清理（sy2.js 等站内SDK已注入的 DOM, 即使脚本已删也清掉）----
+      // 保险: 页面没有任何广告产物特征时整段跳过(避免误伤正常页面动态节点)
+      let hasAdArtifact = false;
+      try {
+        hasAdArtifact = !!document.body.querySelector(
+          '[id^="Vxop"],[id^="Mhvp"],[id^="kUyi"],[class^="kUyi"],' +
+            '[style*="background-position"][style*="background-size"]',
+        );
+        if (!hasAdArtifact) {
+          const kidsPre = document.body.children;
+          for (let i = 0; i < kidsPre.length; i++) {
+            const el = kidsPre[i];
+            const t = el.tagName ? el.tagName.toLowerCase() : "";
+            if (!stTags.has(t) && el.children.length === 0 && !(el.textContent || "").trim()) {
+              hasAdArtifact = true;
+              break;
+            }
+          }
+        }
+      } catch (e) {}
+      if (!hasAdArtifact) return; // 无广告产物: 不进入残留清理
       const kids = Array.from(document.body.children);
       for (const el of kids) {
         if (isSiteContent(el)) continue; // 阅读器UI/内容区硬防护
