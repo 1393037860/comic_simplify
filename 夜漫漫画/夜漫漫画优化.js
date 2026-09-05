@@ -506,23 +506,17 @@
     "table tbody td template textarea tfoot th thead time title tr track u ul var video wbr".split(" ");
 
   const killCustomAds = () => {
-    // 二分调试开关：#ymnocustom 时跳过本清理(排查整页被清空问题用)
+    // 二分调试开关：#ymnocustom 时跳过本清理(排查问题用)
     if (/(?:^|[&#])ymnocustom(?:$|[&#])/.test(location.hash)) return;
     try {
       if (!document.body) return;
       const stTags = new Set(STANDARD_TAGS);
-      // 站点阅读器UI/内容区硬防护：这些区域内外一律不碰(即便被误判也不删)
-      const isSiteContent = (el) => {
-        const c = typeof el.className === "string" ? el.className : "";
-        if (/m_r_title|m_r_bottom|subHeader|control_bottom/.test((el.id || "") + " " + c)) return true;
-        if (el.closest && el.closest(".UnderPage, #currentCache, #commicBox, .mh_box, #ym-all-pics")) return true;
-        return false;
-      };
-      // 资源/结构类标签绝不删除(防误删 <script> 等导致页面初始化失败)
-      const isProtectedTag = (tag) =>
-        /^(script|link|style|iframe|noscript|object|embed|template|head|html|meta|title|base)$/.test(tag);
-      // 带原因/身份的删除(便于日志实锤是谁删了什么)
-      const removeWithLog = (el, why) => {
+      const isProtectedTag = (t) =>
+        /^(script|link|style|iframe|noscript|object|embed|template|head|html|meta|title|base)$/.test(t);
+      const noContent = (el) =>
+        el.children.length === 0 && !(el.textContent || "").trim();
+      const rm = (el, why) => {
+        if (!el || !el.parentNode) return;
         const c = typeof el.className === "string" ? el.className : "";
         const desc =
           "<" +
@@ -530,104 +524,60 @@
           (el.id ? "#" + el.id : "") +
           (c ? "." + c.split(/\s+/)[0] : "") +
           "> 原因:" +
-          why +
-          " 样式:" +
-          ((el.getAttribute("style") || "").slice(0, 100) || "-");
+          why;
         logPush("killCustomAds移除: " + desc);
         console.warn("[YM-KILL] " + desc);
         el.remove();
       };
-      const all = document.body.querySelectorAll("*");
-      for (const el of all) {
-        if (el.id === "ym-dbg-panel") continue;
-        if (el.closest && el.closest("#ym-all-pics")) continue; // 跳过整章长图
-        if (el.tagName === "LINK") {
-          // 注入的"去广告伪装"样式表(实为广告渲染源)
-          const href = el.getAttribute("href") || "";
-          const id = el.id || "";
-          if (/via_inject/i.test(href + " " + id)) {
-            removeWithLog(el, "via_inject伪装样式表");
-          }
-          continue;
-        }
-        const tag = el.tagName ? el.tagName.toLowerCase() : "";
-        if (!tag || stTags.has(tag)) continue; // 标准标签交给其它规则处理
-        if (isProtectedTag(tag)) continue; // 脚本/资源类标签永不删除
-        if (isSiteContent(el)) continue; // 站点内容区/阅读器UI硬防护
-        // 非标准自定义标签：仅当带"强广告特征"才删，宁可漏不可误杀(避免误删页面内容)
-        const inline = el.getAttribute("style") || "";
-        const strongStyle =
-          /position\s*:\s*(fixed|absolute)/i.test(inline) ||
-          /z-?\s*index\s*:\s*\d{3,}/i.test(inline) ||
-          /opacity\s*:\s*0/i.test(inline);
-        // 内含外站链接/图片/iframe(已填充的广告内容)
-        let hasForeign = false;
-        const child = el.querySelector && el.querySelector("a[href], img[src], iframe[src], ins");
-        if (child) {
-          const url = child.getAttribute("href") || child.getAttribute("src") || "";
-          try {
-            hasForeign = !isAllowedHost(new URL(url, location.href).hostname);
-          } catch (e) {}
-        }
-        if (!strongStyle && !hasForeign) continue; // 无强特征: 保留(可能是页面合法内容)
-        removeWithLog(el, "自定义标签+强特征");
+
+      // 1) via_inject 伪装"去广告"样式表(广告渲染源)
+      const injLinks = document.querySelectorAll(
+        'link[href*="via_inject"], link[id*="via_inject"]',
+      );
+      for (const l of Array.from(injLinks)) rm(l, "via_inject伪装样式表");
+
+      // 2) 广告标识元素(id/class 前缀, SDK注入特征)
+      const marked = document.body.querySelectorAll(
+        '[id^="Vxop"],[id^="Mhvp"],[id^="kUyi"],[class^="kUyi"]',
+      );
+      for (const el of Array.from(marked)) {
+        const t = el.tagName ? el.tagName.toLowerCase() : "";
+        if (isProtectedTag(t)) continue;
+        rm(el, "广告标识元素");
       }
 
-      // ---- 广告产物残留清理（sy2.js 等站内SDK已注入的 DOM, 即使脚本已删也清掉）----
-      // 保险: 页面没有任何广告产物特征时整段跳过(避免误伤正常页面动态节点)
-      let hasAdArtifact = false;
-      try {
-        hasAdArtifact = !!document.body.querySelector(
-          '[id^="Vxop"],[id^="Mhvp"],[id^="kUyi"],[class^="kUyi"],' +
-            '[style*="background-position"][style*="background-size"]',
-        );
-        if (!hasAdArtifact) {
-          const kidsPre = document.body.children;
-          for (let i = 0; i < kidsPre.length; i++) {
-            const el = kidsPre[i];
-            const t = el.tagName ? el.tagName.toLowerCase() : "";
-            if (!stTags.has(t) && el.children.length === 0 && !(el.textContent || "").trim()) {
-              hasAdArtifact = true;
-              break;
-            }
-          }
-        }
-      } catch (e) {}
-      if (!hasAdArtifact) return; // 无广告产物: 不进入残留清理
+      // 3) 直挂 body 的空"自定义标签"占位(须带 height/width 内联尺寸; 站点不用自定义标签)
       const kids = Array.from(document.body.children);
       for (const el of kids) {
-        if (isSiteContent(el)) continue; // 阅读器UI/内容区硬防护
-        const id = el.id || "";
-        const cls = typeof el.className === "string" ? el.className : "";
+        const t = el.tagName ? el.tagName.toLowerCase() : "";
+        if (isProtectedTag(t)) continue;
+        if (stTags.has(t)) continue; // 标准标签一律不碰
         const st = el.getAttribute("style") || "";
-        const tag = el.tagName ? el.tagName.toLowerCase() : "";
-        if (isProtectedTag(tag)) continue; // 脚本/资源类标签永不删除
-        const noContent =
-          el.children.length === 0 && !(el.textContent || "").trim();
-        // 已知空壳(不同会话随机命名, 结构性判定兜底)
-        if (id === "Vxop" || id === "Mhvp" || /^kUyi/i.test(id + " " + cls)) {
-          removeWithLog(el, "广告空壳");
-          continue;
+        if (noContent(el) && /(?:height|width)\s*:/i.test(st)) {
+          rm(el, "自定义占位(直挂body+内联尺寸)");
         }
-        // 直挂 body 的空自定义标签占位(dhnefm/wzbm/mfpm 类, 站点本身无自定义标签)
-        if (!stTags.has(tag) && noContent) {
-          removeWithLog(el, "自定义空占位");
-          continue;
-        }
-        // CSS雪碧点击格: 内联 bg-position+bg-size、无内容的小 div(kUyi_0_0 这类)
+      }
+
+      // 4) CSS雪碧点击格(仅"无内容+内联bg-position&bg-size+left数值+高<=90"的小div)
+      const cells = document.body.querySelectorAll(
+        'div[style*="background-position"][style*="background-size"]',
+      );
+      for (const el of Array.from(cells)) {
+        const st = el.getAttribute("style") || "";
+        const hm = /height\s*:\s*([\d.]+)px/i.exec(st);
         if (
-          tag === "div" &&
-          noContent &&
-          /background-position/i.test(st) &&
-          /background-size/i.test(st)
+          noContent(el) &&
+          /left\s*:\s*[\d.]+px/i.test(st) &&
+          hm &&
+          parseFloat(hm[1]) <= 90
         ) {
-          removeWithLog(el, "雪碧点击格");
+          rm(el, "雪碧点击格");
         }
       }
     } catch (e) {}
   };
 
-  // ----- 7) 增强兜底清理（兼容 Userscripts 等"晚注入"：广告SDK可能已抢先执行）-----
+// ----- 7) 增强兜底清理（兼容 Userscripts 等"晚注入"：广告SDK可能已抢先执行）-----
   // 场景：iOS Safari + Userscripts 的 document-start 时机不可靠，wap_show_1/2.js
   // 可能已运行并往广告位(.img_001)注入内容。这里不管它跑没跑，都做二次清理：
   //   a) 移除 wap_show 脚本标签（即使已执行，标签仍留在 DOM 里可定位）；
