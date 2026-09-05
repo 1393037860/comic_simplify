@@ -232,6 +232,39 @@
     startUiWatch();
   } catch (e) {}
 
+  // ---- 抓 UI 删除调用栈(定位删除者) ----
+  try {
+    const uiMatch = (el) => {
+      if (!el || el.nodeType !== 1) return false;
+      const c = typeof el.className === "string" ? el.className : "";
+      return uiWatchRegex.test((el.id || "") + " " + c);
+    };
+    const _removeChild = Node.prototype.removeChild;
+    Node.prototype.removeChild = function (child) {
+      if (uiMatch(child)) {
+        logPush("removeChild 删除UI: <" + (child.id || child.tagName) + ">");
+        console.warn("[YM-UI] removeChild 调用方:\n" + new Error().stack);
+      }
+      return _removeChild.call(this, child);
+    };
+    const _remove = Element.prototype.remove;
+    Element.prototype.remove = function () {
+      if (uiMatch(this)) {
+        logPush("Element.remove 删除UI: <" + (this.id || this.tagName) + ">");
+        console.warn("[YM-UI] Element.remove 调用方:\n" + new Error().stack);
+      }
+      return _remove.call(this);
+    };
+    const _replaceChild = Node.prototype.replaceChild;
+    Node.prototype.replaceChild = function (newNode, oldNode) {
+      if (uiMatch(oldNode)) {
+        logPush("replaceChild 换掉UI: <" + (oldNode.id || oldNode.tagName) + ">");
+        console.warn("[YM-UI] replaceChild(换掉UI) 调用方:\n" + new Error().stack);
+      }
+      return _replaceChild.call(this, newNode, oldNode);
+    };
+  } catch (e) {}
+
   // ----- 2) WebSocket 拦截 -----
   // 广告SDK对夸克/UC/MIUI 等国产浏览器走 wss://... 广告通道，命中白名单外一律给空壳
   try {
@@ -986,6 +1019,12 @@
       }
       const fold = window.scrollY + window.innerHeight; // 视口下边缘
       const imgs = wrapper.children;
+      // 在途图片数(未 load/error 完成, 高度常为0): 太多则暂停补图, 避免失败/慢源时
+      // 零高度计数误判"缺图"而一口气补到全章
+      let inflight = 0;
+      for (let i = 0; i < imgs.length; i++) {
+        if (!imgs[i].complete) inflight++;
+      }
       let extra = 0; // 已加载且在视口下方的张数
       for (let i = imgs.length - 1; i >= 0; i--) {
         const r = imgs[i].getBoundingClientRect();
@@ -995,12 +1034,17 @@
       }
       const before = pending.length;
       let appended = 0;
-      while (pending.length && extra < BUFFER) {
+      while (
+        pending.length &&
+        extra < BUFFER &&
+        inflight < BUFFER + 2 // 在途上限: 缓冲+2, 防止断源时零高度导致的连环补图
+      ) {
         // 单张 try：某张异常只跳过这一张，不中断整批补图
         try {
           const img = makeImg(pending.shift(), imgs.length);
           wrapper.appendChild(img); // 每补一张都会开始加载
           extra++;
+          inflight++;
           appended++;
         } catch (err) {
           console.warn(
@@ -1018,6 +1062,8 @@
           before +
           " | extra=" +
           extra +
+          " 在途=" +
+          inflight +
           " 已插入=" +
           wrapper.children.length +
           " | scrollY=" +
