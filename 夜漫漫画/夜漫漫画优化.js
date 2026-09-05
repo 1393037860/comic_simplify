@@ -954,15 +954,26 @@
       ).length;
       if (shownCount > 1) return;
 
-      // 只追加、不删除：仅把站点单图本身藏掉，再向它所在容器追加整话长图流。
-      // (之前 replaceChild 站点"祖先表格"在部分老模板会把整页布局节点带走→清屏)
+      // 只追加、不删除：向单图所在容器追加整话长图流，站点单图暂不隐藏。
+      // (之前 replaceChild 站点"祖先表格"会把整页布局节点带走→清屏; 立即隐藏单图则首屏空白)
       const singleImgParent = picImg.parentElement;
       if (!singleImgParent) return;
-      picImg.style.setProperty("display", "none", "important");
       wrapper = document.createElement("div");
       wrapper.id = "ym-all-pics";
       wrapper.style.cssText = "width:100%;margin:0 auto;";
       singleImgParent.appendChild(wrapper); // 不动站点任何既有节点
+
+      // 我们的第一张图加载完成(或 3.5s 兜底)后才隐藏站点原图，避免首屏空白/双图闪烁
+      let siteImgHidden = false;
+      const hideSiteImg = () => {
+        if (siteImgHidden) return;
+        siteImgHidden = true;
+        if (picImg && picImg.isConnected) {
+          picImg.style.setProperty("display", "none", "important");
+        }
+      };
+      wrapper.addEventListener("load", hideSiteImg, true); // 捕获任何子图加载
+      setTimeout(hideSiteImg, 3500); // 兜底：即使图源慢也最终隐藏，防止长期双图
 
       // 队列 = 整话全部图片
       pending = urls.slice();
