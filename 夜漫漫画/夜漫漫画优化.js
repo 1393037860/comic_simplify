@@ -130,7 +130,15 @@
   // ----- 1) 广告 SDK 脚本拦截 -----
   // wap_show_1.js = 顶部广告 + 顶部透明点击层/劫持；wap_show_2.js = 底部同款。
   // 两者解码后是纯广告代码，直接删除标签即可在下载完成前阻止执行。
-  const isAdSdkSrc = (src) => /g_js\/wap_show_\d+\.js/.test(src || "");
+  // 广告SDK脚本识别：
+  //  - 老款: g_js/wap_show_*.js(透明点击层+劫持);
+  //  - 新款: 站内 /js/sy*.js(如 sy2.js, 注入 Vxop/Mhvp/mfpm/wzbm 占位 + kUyi 雪碧点击格);
+  //  - 同族站: wapquanzhan.js 等
+  const isAdSdkSrc = (src) =>
+    /g_js\/wap_show_\d+\.js/.test(src || "") ||
+    /\/js\/sy\d+\.js/i.test(src || "") ||
+    /wapquanzhan\.js/i.test(src || "") ||
+    /(?:^|\/)wap_show\d*\.js/i.test(src || "");
 
   const neutralizeScript = (s) => {
     if (s.dataset.ymAdBlocked === "1") return; // 已处理过则跳过（防重复日志）
@@ -434,6 +442,39 @@
             (inline ? " 样式:" + inline.slice(0, 80) : ""),
         );
         el.remove();
+      }
+
+      // ---- 广告产物残留清理（sy2.js 等站内SDK已注入的 DOM, 即使脚本已删也清掉）----
+      const kids = Array.from(document.body.children);
+      for (const el of kids) {
+        const id = el.id || "";
+        const cls = typeof el.className === "string" ? el.className : "";
+        const st = el.getAttribute("style") || "";
+        const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        const noContent =
+          el.children.length === 0 && !(el.textContent || "").trim();
+        // 已知空壳(不同会话随机命名, 结构性判定兜底)
+        if (id === "Vxop" || id === "Mhvp" || /^kUyi/i.test(id + " " + cls)) {
+          logPush("移除广告空壳 <" + tag + (id ? "#" + id : "") + ">");
+          el.remove();
+          continue;
+        }
+        // 直挂 body 的空自定义标签占位(dhnefm/wzbm/mfpm 类, 站点本身无自定义标签)
+        if (!stTags.has(tag) && noContent) {
+          logPush("移除自定义占位 <" + tag + ">");
+          el.remove();
+          continue;
+        }
+        // CSS雪碧点击格: 内联 bg-position+bg-size、无内容的小 div(kUyi_0_0 这类)
+        if (
+          tag === "div" &&
+          noContent &&
+          /background-position/i.test(st) &&
+          /background-size/i.test(st)
+        ) {
+          logPush("移除雪碧点击格 <div" + (id ? "#" + id : "") + ">");
+          el.remove();
+        }
       }
     } catch (e) {}
   };
