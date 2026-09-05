@@ -512,6 +512,9 @@
         if (el.closest && el.closest(".UnderPage, #currentCache, #commicBox, .mh_box, #ym-all-pics")) return true;
         return false;
       };
+      // 资源/结构类标签绝不删除(防误删 <script> 等导致页面初始化失败)
+      const isProtectedTag = (tag) =>
+        /^(script|link|style|iframe|noscript|object|embed|template|head|html|meta|title|base)$/.test(tag);
       // 带原因/身份的删除(便于日志实锤是谁删了什么)
       const removeWithLog = (el, why) => {
         const c = typeof el.className === "string" ? el.className : "";
@@ -543,6 +546,7 @@
         }
         const tag = el.tagName ? el.tagName.toLowerCase() : "";
         if (!tag || stTags.has(tag)) continue; // 标准标签交给其它规则处理
+        if (isProtectedTag(tag)) continue; // 脚本/资源类标签永不删除
         if (isSiteContent(el)) continue; // 站点内容区/阅读器UI硬防护
         // 非标准自定义标签：仅当带"强广告特征"才删，宁可漏不可误杀(避免误删页面内容)
         const inline = el.getAttribute("style") || "";
@@ -591,6 +595,7 @@
         const cls = typeof el.className === "string" ? el.className : "";
         const st = el.getAttribute("style") || "";
         const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        if (isProtectedTag(tag)) continue; // 脚本/资源类标签永不删除
         const noContent =
           el.children.length === 0 && !(el.textContent || "").trim();
         // 已知空壳(不同会话随机命名, 结构性判定兜底)
