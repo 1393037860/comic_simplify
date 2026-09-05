@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  夜漫(yueman1)系 + 图蛋(tudanmanhua/tudanmh)系：移除顶部/底部广告与点击劫持，阅读页整话连看(增量懒加载)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -55,6 +55,12 @@
 //     kUyi CSS雪碧点击格)、wapquanzhan.js 等; 同时新增"广告产物残留清理"(结构性判定,
 //     随机命名也兜底: 空自定义占位/雪碧格(内联bg-position+bg-size无内容)/Vxop-Mhvp-kUyi 空壳),
 //     即使 SDK 已抢先执行也能把注入的 DOM 清干净; 全程不触碰任何标准 HTML 元素
+// 2.1 修复/调整:
+//   - 脚本/iframe 删除由"非白名单即删"改为"广告域名黑名单制", 不再误删 360(qihucdn/qhres2)/百度等合法第三方
+//   - killCustomAds 加站点UI硬防护(标题栏/底栏/阅读区不删) + 资源类标签(script/link/style/iframe 等)永不删除,
+//     修复误删 <script id=sozz> 导致 document.write 链中断、initIntroData 未定义、章节列表为空的 bug
+//   - 懒加载加"在途图片上限", 修复断源/慢源时零高度计数导致的连环补图(一次性补到全章)
+//   - 调试功能默认关闭(#ymdebug/#ymuiwatch/#ymnoexpand/#ymnocustom 按需开启)
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
