@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  夜漫(yueman1)系 + 图蛋(tudanmanhua/tudanmh)系：移除顶部/底部广告与点击劫持，阅读页整话连看(增量懒加载)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -34,6 +34,10 @@
 //     "广告跳转回滚"事件写入诊断日志(便于 dump 验证)
 // 1.6 扩展: 支持同族镜像域名 图蛋(m.tudanmanhua.cc / m.tudanmh.cc 等): 通用去广告保护全覆盖;
 //     整章连看仅在该站阅读页结构同 QTcms(含 qTcms_S_m_murl/#qTcms_pic)时生效
+// 1.7 增强: 整章连看图片优先调用站点 f_qTcms_Pic_curUrl_realpic(完整防盗链链), 失败自动换源重试;
+//     normalize 兜底补 s1/s2→p8.taoman(/scomic/) 规则(无 lookbehind, 兼容 iOS);
+//     透明点击层杀手泛化: div → 所有带内联样式元素(覆盖 llkmdam 等自定义标签);
+//     不做第三方镜像池轮换(搬运站资源, 减少维护); 诊断面板默认关闭(#ymdebug 可临时开启)
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
@@ -462,10 +466,11 @@
   //   a) 网址后加 #ymdebug（hash 不发给服务器，不会被 404 拦截）；
   //   b) 手动改下面 DEBUG_UI 为 true 后刷新（长期开启排查）。
   // 开启后：检测到残留广告会自动弹出面板/描红框，并提供"复制页面HTML(发回分析)"按钮。
-  const DEBUG_UI = true; // ⚠ 调试期强制开启；排查完毕改回：仅 #ymdebug 或 false
+  // 默认关闭；排查时在网址后加 #ymdebug（hash 不发给服务器）即可临时开启。
+  const DEBUG_UI = /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash);
   if (DEBUG_UI) {
-    // 调试期: 面板常显(即使页面干净也显示状态)；排查完可改回仅 #ymdebug 时显示
-    const WANT = true;
+    // 仅 #ymdebug 时面板常显；否则只在发现残留广告/移除记录时自动弹出
+    const WANT = /(?:^|[&#])ymdebug(?:=1)?(?:$|[&#])/.test(location.hash);
     let panel = null;
     let preEl = null;
     let emptyRounds = 0;
