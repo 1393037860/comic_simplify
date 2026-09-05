@@ -403,12 +403,22 @@
         }
         const tag = el.tagName ? el.tagName.toLowerCase() : "";
         if (!tag || stTags.has(tag)) continue; // 标准标签交给其它规则处理
-        // 非标准自定义标签 = 广告占位/容器候选
+        // 非标准自定义标签：仅当带"强广告特征"才删，宁可漏不可误杀(避免误删页面内容)
         const inline = el.getAttribute("style") || "";
-        const hasChild =
-          el.querySelector && el.querySelector("a[href], img, iframe, ins");
-        const text = (el.textContent || "").trim();
-        if (!inline && !hasChild && text.length === 0) continue;
+        const strongStyle =
+          /position\s*:\s*(fixed|absolute)/i.test(inline) ||
+          /z-?\s*index\s*:\s*\d{3,}/i.test(inline) ||
+          /opacity\s*:\s*0/i.test(inline);
+        // 内含外站链接/图片/iframe(已填充的广告内容)
+        let hasForeign = false;
+        const child = el.querySelector && el.querySelector("a[href], img[src], iframe[src], ins");
+        if (child) {
+          const url = child.getAttribute("href") || child.getAttribute("src") || "";
+          try {
+            hasForeign = !isAllowedHost(new URL(url, location.href).hostname);
+          } catch (e) {}
+        }
+        if (!strongStyle && !hasForeign) continue; // 无强特征: 保留(可能是页面合法内容)
         logPush(
           "移除自定义标签广告 <" +
             tag +
