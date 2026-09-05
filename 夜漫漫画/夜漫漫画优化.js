@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         夜漫漫画优化（去广告 + 整章连看）
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  夜漫(yueman1)系 + 图蛋(tudanmanhua/tudanmh)系：移除顶部/底部广告与点击劫持，阅读页整话连看(增量懒加载)
 // @author       Suave
 // @match        http://m.yueman1.cc/*
@@ -41,6 +41,10 @@
 // 1.8 调整: BUFFER 默认改 1(可视区下方仅预载1张, 最保守防封IP);
 //     图片重试每轮刷新站点转换(老源随机镜像, 应对单镜像429);
 //     重试去重: 死源(域名注销/DNS失效)立即灰框放弃, 不再重复请求同一地址刷爆 Network
+// 1.9 修复: 广告SDK换用"随机自定义标签"(dhnefm/llkmdam 等, 非标准HTML标签)在 body 首部插入
+//     定尺寸占位 + 注入伪装成去广告的 <link id=via_inject_css_blocker> 样式表(站点域名提供, 负责把广告画进占位),
+//     常规脚本/iframe/图片规则全部漏判; 新增"标准HTML标签白名单"识别并整块移除自定义标签广告,
+//     via_inject 伪装样式表一并清除; 接入 MutationObserver(注入即清)+1.5s周期轮询双层清理
 
 // ==============================================================
 // 夜漫漫画优化 = 原「夜漫漫画去广告」+「夜漫漫画整章显示」合并版
