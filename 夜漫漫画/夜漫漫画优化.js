@@ -216,12 +216,14 @@
   startScriptObserver();
   scanAdScripts(); // 立即扫一次（先于站点脚本执行）
 
-  // ---- 阅读器UI移除监控(调试用)：谁动了 标题栏/底栏/阅读区 一看便知 ----
+  // ---- 阅读器UI移除监控(调试用, 默认关闭)：谁动了 标题栏/底栏/阅读区 一看便知 ----
   // 本脚本从不删除标准元素；若此处报警且同一时刻没有本脚本的"移除/隐藏"日志，
-  // 说明是广告SDK或站点代码在删阅读器框架(排查 subHeader/control_bottom 消失问题)
-  const uiWatchRegex =
-    /m_r_title|m_r_bottom|control_bottom|subHeader|UnderPage|currentCache|commicBox|mh_box/;
-  try {
+  // 说明是广告SDK或站点代码在删阅读器框架(排查 subHeader/control_bottom 消失问题)。
+  // 排查时在网址加 #ymuiwatch 开启（常驻原型替换/观察可能干扰页面, 故默认关）
+  if (/(?:^|[&#])ymuiwatch(?:$|[&#])/.test(location.hash)) {
+    const uiWatchRegex =
+      /m_r_title|m_r_bottom|control_bottom|subHeader|UnderPage|currentCache|commicBox|mh_box/;
+    try {
     const uiWatch = new MutationObserver((muts) => {
       try {
         for (const m of muts) {
@@ -286,7 +288,8 @@
       }
       return _replaceChild.call(this, newNode, oldNode);
     };
-  } catch (e) {}
+    } catch (e) {}
+  } // end if(ymuiwatch)
 
   // ----- 2) WebSocket 拦截 -----
   // 广告SDK对夸克/UC/MIUI 等国产浏览器走 wss://... 广告通道，命中白名单外一律给空壳
