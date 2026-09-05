@@ -954,13 +954,15 @@
       ).length;
       if (shownCount > 1) return;
 
-      // 建空容器替换站点的单图表格
-      const holder = picImg.closest("table") || picImg.parentElement;
-      if (!holder) return;
+      // 只追加、不删除：仅把站点单图本身藏掉，再向它所在容器追加整话长图流。
+      // (之前 replaceChild 站点"祖先表格"在部分老模板会把整页布局节点带走→清屏)
+      const singleImgParent = picImg.parentElement;
+      if (!singleImgParent) return;
+      picImg.style.setProperty("display", "none", "important");
       wrapper = document.createElement("div");
       wrapper.id = "ym-all-pics";
       wrapper.style.cssText = "width:100%;margin:0 auto;";
-      holder.parentNode.replaceChild(wrapper, holder);
+      singleImgParent.appendChild(wrapper); // 不动站点任何既有节点
 
       // 队列 = 整话全部图片
       pending = urls.slice();
